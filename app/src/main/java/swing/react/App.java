@@ -5,7 +5,7 @@ package swing.react;
 
 public class App {
     public String getGreeting() {
-        return "Hello World!";
+        return "Use the REPL to load swing-react and then call run-app. Read README.md.";
     }
 
     public static void main(String[] args) {

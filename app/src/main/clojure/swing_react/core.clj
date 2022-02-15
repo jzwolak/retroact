@@ -128,7 +128,8 @@
    ; if certain parts of the state changed. Like `pack()` may only execute if visibility goes from false to true. Having
    ; a way to handle this concisely and generically would be amazing!
    :component-did-mount
-   (fn component-did-mount [component app-state]
+   (fn component-did-mount [component app-ref app-value]
+     (println "made it to component did mount")
      (.pack component)
      (.setVisible component true))
    ; TODO: I can create fns to make these maps more expressive. As in:
@@ -136,34 +137,33 @@
    ;        (label (or (:greeting @app-state) "Hello World!"))
    ;        (button "Say Hi!" (fn say-hi [action-event] (println "hello world!") (swap! app-state assoc :greeting "Yo"))))
    :render
-   (fn render [app-state]
+   (fn render [app-ref app-value]
      {:class      :frame
-      :background (or (:background @app-state) 0xff0000)
+      :background (or (get-in app-value [:state :background]) 0xff0000)
       :opaque     true
       :on-close   :dispose
       :layout     {:class              :mig-layout
                    :layout-constraints "flowy"}
       :contents   [{:class :label
-                    :text  (or (:greeting @app-state) "Hello World!")}
+                    :text  (or (get-in app-value [:state :greeting]) "Hello World!")}
                    {:class     :button
                     :text      "Say Hi!"
                     :on-action (fn say-hi [action-event]
                                  (println "hello world!")
-                                 (swap! app-state assoc :greeting "Yo" :background 0x00ff00))}]
+                                 (swap! app-ref update-in [:state] assoc :greeting "Yo" :background 0x00ff00))}]
       })})
 
 (defn update-view
-  [key app-state old-state new-state]
-  (let [app (meta app-state)
+  [key app-ref old-value new-value]
+  (let [app (:app new-value)
         view-fn (:render app)
-        view (view-fn app-state)
-        component (get app :component)]
+        view (view-fn app-ref new-value)
+        component (:root-component new-value)]
     (apply-attributes component view)))
 
 (defn run-app
   [app]
   (let [constructor (get app :constructor (fn default-constructor [props] {}))
-        component-did-mount (get app :component-did-mount (fn default-component-did-mount [component app-state]))
         render (get app :render)
         props {}                                            ; TODO: set props... to what I don't know... maybe this is just a React thing
         app-ref (atom {:state (constructor props)           ; domain state
@@ -184,11 +184,15 @@
         ; Especially if I change to dosync. Then I need a special Swing-React fn to update state. That's probably fine.
         ; And that will solve my concurrency problem because I can then control when those updates occur.
         #_root-frame #_(show-ui (view-fn app-ref))]
-
     (add-watch app-ref :swing-react-update update-view)
+    (println "anybody??")
     (let [component
-          (-> (render app-ref)
+          (-> (render app-ref @app-ref)
               (build-ui))]
-      (alter-meta! app-ref assoc :component component)
-      (component-did-mount component app-ref))
+      ; This will trigger a second call to the view-fn (:render)
+      (swap! app-ref assoc :root-component component)
+      (let [app-value @app-ref
+            component-did-mount (get-in app-value [:app :component-did-mount] (fn default-component-did-mount [component app-ref app-value]))]
+        (println "made it to call of component did mount")
+        (component-did-mount (:root-component app-value) app-ref (:state app-value))))
     ))

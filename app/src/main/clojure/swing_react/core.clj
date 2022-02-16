@@ -6,19 +6,6 @@
            (net.miginfocom.swing MigLayout)
            (java.awt.event ActionListener)))
 
-(def default-ui
-  {:class      :frame
-   :background 0xff0000
-   :on-close   :dispose
-   :layout     {:class :mig-layout
-                :layout-constraints "flowy"}
-   :contents   [{:class :label
-                 :text  "Hello World!"}
-                {:class :button
-                 :text "Say Hi!"
-                 :on-action (fn say-hi [action-event] (println "hello world!"))}]
-   })
-
 ; Open questions:
 ;
 ;  - How to resolve arguments to appliers that need to be objects... like layout managers. And colors for that matter.
@@ -119,7 +106,8 @@
   (and (map? attr-applier)
        (contains? attr-applier :get-existing-children)
        (contains? attr-applier :add-new-child-at)
-       (contains? attr-applier :remove-child-at)))
+       (contains? attr-applier :remove-child-at)
+       (contains? attr-applier :get-child-at)))
 
 (declare apply-attributes)
 
@@ -132,10 +120,10 @@
         get-child-at (:get-child-at attr-applier)
         old-children (get old-view attr)
         new-children (get new-view attr)
-        _ (println "old children:")
-        _ (pprint old-children)
-        _ (println "new children:")
-        _ (pprint new-children)
+        ;_ (println "old children:")
+        ;_ (pprint old-children)
+        ;_ (println "new children:")
+        ;_ (pprint new-children)
         max-children (max (count old-children) (count new-children))]
     (doseq [[old-child new-child index]
             (map vector
@@ -161,19 +149,23 @@
           ; as a list of fns to apply after the swap is complete. In addition, the new view state should be kept with
           ; this list of fns and the atom should be updated with the new view state when a successful update occurs
           ; tic-tok cycle of swaps on the atom...
+          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI every be that deeply
+          ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
+          ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
+          ; to be moved to apply-attributes or recursive itself.
           (children-applier? attr-applier) (apply-children-applier attr-applier component attr old-view new-view)
           :else (do
-                  (println "applying attribute " attr " with value " (get new-view attr))
+                  #_(println "applying attribute " attr " with value " (get new-view attr))
                   (attr-applier component (get new-view attr)))))))
   component)
 
 (defn instantiate-class
   [ui]
   (let [id (:class ui)
-        _ (println "instatiating" id)
+        ;_ (println "instatiating" id)
         constructor (get-in class-map [(:class ui) #_:constructor])
         component (constructor)]
-    (println "component: " component)
+    #_(println "component: " component)
     component))
 
 ; TODO: perhaps build-ui is more like build-object because :mig-layout is not a UI. And the way things are setup,
@@ -184,128 +176,42 @@
   (-> (instantiate-class ui)
       (apply-attributes nil ui)))
 
-(defn show-ui
-  "Builds and displays a ui. This is useful for top level components in systems that require an explicit show or load
-  before anything is displayed."
-  [ui]
-  (let [window (build-ui ui)]
-    (.pack window)
-    (.show window)
-    window))
-
-(defn my-hello-world-app
-  []
-  {:constructor
-   (fn constructor [props]
-     ; return initial app-state. Not necessary if it's an empty map, but I'll put it here.
-     {})
-   ; TODO: possibly generify componentDidMount to be an event in response to state change. Code may need to execute when
-   ; the state changes to pack again or revalidate or any number of other things. And the code may need to execute only
-   ; if certain parts of the state changed. Like `pack()` may only execute if visibility goes from false to true. Having
-   ; a way to handle this concisely and generically would be amazing!
-   :component-did-mount
-   (fn component-did-mount [component app-ref app-value]
-     (println "made it to component did mount")
-     (.pack component)
-     (.setVisible component true))
-   ; Called when a child is added, removed or "swapped". A swap is when a child is removed and a new one is added in its
-   ; place.
-   ; TODO: this is not implemented yet.
-   :children-changed
-   (fn children-changed [component app-ref app-value]
-     (.pack component))
-   ; TODO: I can create fns to make these maps more expressive. As in:
-   ; (frame {:background 0xff0000 :on-close :dispose :layout (mig-layout "flowy)}
-   ;        (label (or (:greeting @app-state) "Hello World!"))
-   ;        (button "Say Hi!" (fn say-hi [action-event] (println "hello world!") (swap! app-state assoc :greeting "Yo"))))
-   :render
-   (fn render [app-ref app-value]
-     {:class      :frame
-      :background (or (get-in app-value [:state :background]) 0xff0000)
-      :opaque     true
-      :on-close   :dispose
-      :layout     {:class              :mig-layout
-                   :layout-constraints "flowy"}
-      :contents   (let [contents [{:class :label
-                                   :text  (or (get-in app-value [:state :greeting]) "Hello World!")}
-                                  {:class     :button
-                                   :text      "Say Hi!"
-                                   ; TODO: this causes an update every time because it generates a new anonymous fn. Think about how to
-                                   ; avoid the update every time. A named fn would probably be better, but then how do we get state?
-                                   :on-action (fn say-hi [action-event]
-                                                (println "hello world!")
-                                                (swap! app-ref update-in [:state]
-                                                       (fn [state]
-                                                         (println "state: " state)
-                                                         (if (= "Yo" (:greeting state))
-                                                           (assoc state :greeting "Dog" :background 0x4488ff :expanded true)
-                                                           (assoc state :greeting "Yo" :background 0x00ffff :expanded true)))
-                                                       ))}]]
-                    (if (get-in app-value [:state :expanded])
-                      (conj contents {:class :label :text "Expanded!"})
-                      contents))
-      })})
-
 (defn update-view
   [key app-ref old-value new-value]
-  (if (and (not (contains? old-value :root-component))
-           (contains? new-value :root-component))
-    ; Component did mount
+  ; TODO: "mount" is not an appropriate term, I took this from React. "create" would be better. Think about it.
+  ; Component did mount
+  (when (and (not (contains? old-value :root-component))
+             (contains? new-value :root-component))
+    (println "LIFECYCLE: root component mounted.")
     (let [component-did-mount (get-in new-value [:app :component-did-mount])
           component (:root-component new-value)]
-      (component-did-mount component app-ref new-value))
-    ; Update
-    (if (not= (:state old-value) (:state new-value))
-      (do
-        (println "state changed! updating")
-        (let [app (:app new-value)
-              view-fn (:render app)
-              view (view-fn app-ref new-value)
-              old-view (:current-view old-value)]
-          (pprint (diff old-view view))
-          (if-let [component (:root-component new-value)]
-            (do (apply-attributes component old-view view)
-                (pprint view)
-                (swap! app-ref assoc :current-view view))
-            (let [root-component (build-ui view)]
-              (swap! app-ref assoc :root-component root-component :current-view view)))
-
-          #_(if (= :frame (:class view))
-              (pprint (diff (get-in old-view [:contents]) (get-in view [:contents]))))
-          )))))
+      (component-did-mount component app-ref new-value)))
+  ; Update
+  (when (not= (:state old-value) (:state new-value))
+    (println "LIFECYCLE: state changed. updating.")
+    (let [app (:app new-value)
+          render (:render app)
+          old-view (:current-view old-value)
+          new-view (render app-ref new-value)]
+      (pprint (diff old-view new-view))
+      (if-let [root-component (:root-component new-value)]
+        ; root component exists, update it
+        (do (apply-attributes root-component old-view new-view)
+            #_(pprint new-view)
+            (swap! app-ref assoc :current-view new-view))
+        ; root component does not exist, create it and associate it ("mount" it)
+        (let [root-component (build-ui new-view)]
+          (swap! app-ref assoc :root-component root-component :current-view new-view))))))
 
 (defn run-app
   [app]
   (let [constructor (get app :constructor (fn default-constructor [props] {}))
-        render (get app :render)
         props {}                                            ; TODO: set props... to what I don't know... maybe this is just a React thing
-        app-ref (atom {})
-        ; TODO: add watches
-        ; TODO: set initial state after adding watches! That way a view-fn call is triggered with initial state! Cool!
-        ; TODO: after first watch is triggered, a pack, show must happen on root. How do I do this?? Maybe I don't!
-        ;       The user must do that. That could be tricky.
-        ;       Perhaps there needs to be a place to just execute code and the user can specify what to execute in
-        ;       this place. Kind of like React's componentDidMount and componentWillUnmount functions.
-        ; NOTE: root frame needs to be defined before calling view-fn because calling view-fn may trigger watches. Ok,
-        ;       so the watches could be "held". This gets back to that concurrency problem. All the code in the view-fn
-        ;       must finish before the watches begin. Somehow, we want to pause those watches. Perhaps we should be
-        ;       using refs instead of atoms and dosync so that nothing happens on the other refs while we're in these
-        ;       refs.
-        ; Yeah, so I shouldn't get the view-fn the atom or the ref... I should give it the value of the state. That way
-        ; there is no way it can mess up and change the value while running... which could mess up other view-fns.
-        ; Especially if I change to dosync. Then I need a special Swing-React fn to update state. That's probably fine.
-        ; And that will solve my concurrency problem because I can then control when those updates occur.
-        #_root-frame #_(show-ui (view-fn app-ref))]
+        app-ref (atom {})]
     (add-watch app-ref :swing-react-update update-view)
-    (println "anybody??")
-    (let [view (render app-ref @app-ref)
-          #_component #_(build-ui view)]
-      (swap! app-ref assoc :state (constructor props)       ; domain state
-                           :app app)
-      ; This will trigger a second call to the view-fn (:render)
-      #_(swap! app-ref assoc :root-component component :current-view view)
-      (let [app-value @app-ref
-            component-did-mount (get-in app-value [:app :component-did-mount] (fn default-component-did-mount [component app-ref app-value]))]
-        (println "made it to call of component did mount")
-        (component-did-mount (:root-component app-value) app-ref (:state app-value))))
+    (swap! app-ref assoc :state (constructor props)         ; domain state
+           :app app)
+    (let [app-value @app-ref
+          component-did-mount (get-in app-value [:app :component-did-mount] (fn default-component-did-mount [component app-ref app-value]))]
+      (component-did-mount (:root-component app-value) app-ref app-value))
     ))

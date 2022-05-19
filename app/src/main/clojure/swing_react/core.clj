@@ -65,21 +65,22 @@
      :button     {:constructor #(JButton.) :class JButton}})
 
 (def attr-appliers
-  {:background         (fn set-background [c color] (cond
-                                                      (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
-                                                      :else (.setBackground c (Color. color))))
-   :opaque             (fn set-opaque [c opaque] (cond
-                                                   (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
-                                                   :else (.setOpaque c opaque)))
-   :text               (fn set-text [c text] (.setText c text))
-   :layout             (fn set-layout [c layout] (.setLayout c (build-ui layout)))
+  {:background         (fn set-background [c ctx color] (cond
+                                                          (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
+                                                          :else (.setBackground c (Color. color))))
+   :opaque             (fn set-opaque [c ctx opaque] (cond
+                                                       (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
+                                                       :else (.setOpaque c opaque)))
+   :text               (fn set-text [c ctx text] (.setText c text))
+   :layout             (fn set-layout [c ctx layout] (.setLayout c (build-ui (:app-ref ctx) layout)))
    ; TODO: if action not in on-close-action-map, then add it as a WindowListener to the close event
-   :on-close           (fn on-close [c action] (.setDefaultCloseOperation c (on-close-action-map action)))
-   :layout-constraints (fn set-layout-constraints [c constraints] (.setLayoutConstraints c constraints))
+   :on-close           (fn on-close [c ctx action] (.setDefaultCloseOperation c (on-close-action-map action)))
+   :layout-constraints (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
-   :on-action          (fn on-action [c action-handler]
+   :on-action          (fn on-action [c ctx action-handler]
                          (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
-                         (.addActionListener c (reify-action-listener action-handler)))
+                         (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
+                                                                        (action-handler (:app-ref ctx) action-event)))))
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:
@@ -91,15 +92,7 @@
                         :add-new-child-at      (fn add-new-child-at [^Container c ^Component child index] (.add ^Container (.getContentPane c) child ^int index))
                         :remove-child-at       (fn remove-child-at [c index] (.remove (.getContentPane c) index))
                         :get-child-at          (fn get-child-at [c index] (.getComponent (.getContentPane c) index))}
-   #_(fn add-contents [c children] (doseq [child children] (.add c (build-ui child))))})
-
-; TODO: use a multimethod to dispatch based on :class
-#_(defn add-contents
-  [component ui]
-  (when (and (= :frame (:class ui))
-             (:contents ui))
-    (doseq [child (:contents ui)] (.add component (build-ui child))))
-  component)
+   })
 
 (defn children-applier?
   [attr-applier]
@@ -115,7 +108,7 @@
   (vec (take length (concat col (repeat nil)))))
 
 (defn apply-children-applier
-  [attr-applier component attr old-view new-view]
+  [attr-applier component ctx attr old-view new-view]
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
         old-children (get old-view attr)
@@ -132,15 +125,15 @@
                  (range))]
       #_(println "child component (" index "):" (get-child-at component index))
       (cond
-        (nil? old-child) (add-new-child-at component (build-ui new-child) index)
+        (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) index)
 
         ; TODO: remove children that aren't in new-children
         ; TODO: check that identity (class name) match before applying attributes, otherwise, remove and add new child
-        :else (apply-attributes (get-child-at component index) old-child new-child)
+        :else (apply-attributes {:component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
         ))))
 
 (defn apply-attributes
-  [component old-view new-view]
+  [{:keys [component app-ref old-view new-view]}]
   (if (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
       (if-let [attr-applier (get attr-appliers attr)]
@@ -153,10 +146,11 @@
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
           ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
           ; to be moved to apply-attributes or recursive itself.
-          (children-applier? attr-applier) (apply-children-applier attr-applier component attr old-view new-view)
+          (children-applier? attr-applier) (apply-children-applier attr-applier component {:app-ref app-ref} attr old-view new-view)
+          ; Assume attr-applier is a fn and call it on the component.
           :else (do
                   #_(println "applying attribute " attr " with value " (get new-view attr))
-                  (attr-applier component (get new-view attr)))))))
+                  (attr-applier component {:app-ref app-ref} (get new-view attr)))))))
   component)
 
 (defn instantiate-class
@@ -171,13 +165,13 @@
 ; TODO: perhaps build-ui is more like build-object because :mig-layout is not a UI. And the way things are setup,
 ; any object can be built with this code.
 (defn build-ui
-  "Take a ui and realize it."
-  [ui]
-  (-> (instantiate-class ui)
-      (apply-attributes nil ui)))
+  "Take a view and realize it."
+  [app-ref view]
+  (let [component (instantiate-class view)]
+    (apply-attributes {:component component :app-ref app-ref :new-view view})))
 
 (defn update-view
-  [key app-ref old-value new-value]
+  [watch-key app-ref old-value new-value]
   ; TODO: "mount" is not an appropriate term, I took this from React. "create" would be better. Think about it.
   ; Component did mount
   (when (and (not (contains? old-value :root-component))
@@ -196,11 +190,11 @@
       (pprint (diff old-view new-view))
       (if-let [root-component (:root-component new-value)]
         ; root component exists, update it
-        (do (apply-attributes root-component old-view new-view)
+        (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
             #_(pprint new-view)
             (swap! app-ref assoc :current-view new-view))
         ; root component does not exist, create it and associate it ("mount" it)
-        (let [root-component (build-ui new-view)]
+        (let [root-component (build-ui app-ref new-view)]
           (swap! app-ref assoc :root-component root-component :current-view new-view))))))
 
 (defn run-app

@@ -14,7 +14,8 @@ I'm starting with a pure Clojure implementation and no Java bindings because tha
 Run the REPL then execute the following.
 
     > (require '[swing-react.core :refer :all] :reload-all)
-    > (run-app (my-hello-world-app))
+    > (require '[examples.greeter :refer :all] :reload-all)
+    > (run-app (greeter-app))
 
 # Left Off
 

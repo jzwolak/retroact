@@ -1,5 +1,13 @@
 (ns examples.greeter)
 
+(defn say-hi-action-handler
+  [app-ref action-event]
+  (swap! app-ref update-in [:state]
+         (fn [state]
+           (if (= "Yo" (:greeting state))
+             (assoc state :greeting "Dog" :background 0x4488ff :expanded true)
+             (assoc state :greeting "Yo" :background 0x00ffff :expanded true)))))
+
 (defn greeter-app
   []
   {:constructor
@@ -17,6 +25,9 @@
    ; Called when a child is added, removed or "swapped". A swap is when a child is removed and a new one is added in its
    ; place.
    ; TODO: this is not implemented yet.
+   ; Or maybe I want to associate a pack action with the actual addition of the child in a way where it's only run if
+   ; the child is actually added. Can I add transition "triggers" kind of like in SBML... when the state transitions
+   ; from one to another.
    :children-changed
    (fn children-changed [component app-ref app-value]
      (.pack component))
@@ -36,15 +47,8 @@
                                    :text  (or (get-in app-value [:state :greeting]) "Hello World!")}
                                   {:class     :button
                                    :text      "Say Hi!"
-                                   ; TODO: this causes an update every time because it generates a new anonymous fn. Think about how to
-                                   ; avoid the update every time. A named fn would probably be better, but then how do we get state?
-                                   :on-action (fn say-hi [action-event]
-                                                (swap! app-ref update-in [:state]
-                                                       (fn [state]
-                                                         (if (= "Yo" (:greeting state))
-                                                           (assoc state :greeting "Dog" :background 0x4488ff :expanded true)
-                                                           (assoc state :greeting "Yo" :background 0x00ffff :expanded true)))
-                                                       ))}]]
+                                   ; named fn is necessary to avoid update every time with anonymous fn
+                                   :on-action say-hi-action-handler}]]
                     (if (get-in app-value [:state :expanded])
                       (conj contents {:class :label :text "Expanded!"})
                       contents))

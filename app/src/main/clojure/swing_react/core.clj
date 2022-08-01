@@ -1,10 +1,14 @@
 (ns swing-react.core
   (:require [clojure.data :refer [diff]]
-            [clojure.pprint :refer [pprint]])
-  (:import (java.awt Color Button Container Component)
-           (javax.swing JFrame JLabel JButton)
+            [clojure.pprint :refer [pprint]]
+            [swing-react.jlist :refer [create-jlist]]
+            [clojure.tools.logging :as log]
+            [manifold.stream :as ms])
+  (:import (java.awt Color Button Container Component Dimension)
+           (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities)
            (net.miginfocom.swing MigLayout)
-           (java.awt.event ActionListener)))
+           (java.awt.event ActionListener)
+           (javax.swing.event DocumentListener)))
 
 ; Open questions:
 ;
@@ -26,7 +30,7 @@
 ;
 ; :component represents the type of the component which is part of the object's identity and is going to be persistent.
 ; :background is an attribute that may change.
-; :contents point to children objects that have their own identities and attributes (and possibly chidren). They make
+; :contents point to children objects that have their own identities and attributes (and possibly children). They make
 ;           this a tree.
 ;
 ; I can put all the attributes in a key called :attributes or :attrs or something.
@@ -37,6 +41,8 @@
 ; For now, I'll stick with the flat map and see how it goes.
 
 (declare build-ui)
+
+(def app-refs (atom []))
 
 (def on-close-action-map
   {:dispose JFrame/DISPOSE_ON_CLOSE
@@ -49,38 +55,130 @@
     (actionPerformed [this action-event]
       (action-handler action-event))))
 
+(defn reify-document-listener-to-text-change-listener [text-change-handler]
+  (reify DocumentListener
+    (changedUpdate [this document-event] (text-change-handler document-event))
+    (insertUpdate [this document-event] (text-change-handler document-event))
+    (removeUpdate [this document-event] (text-change-handler document-event))))
+
+(defn set-width [c ctx width]
+  (let [height (-> c .getSize .getHeight)]
+    (.setSize c (Dimension. width height))))
+
+(defn set-height [c ctx height]
+  (let [width (-> c .getSize .getWidth)]
+    (.setSize c (Dimension. width height))))
+
+
+; :contents fns
+(defmulti get-existing-children class)
+(defmethod get-existing-children Container [c] (.getComponents (.getContentPane c)))
+(defmethod get-existing-children JList [jlist]
+  (let [model (.getModel jlist)]
+    (println "JList get-existing-children not implemented")
+    (-> model
+        (.elements)
+        (enumeration-seq)
+        (vec))))
+
+(defmulti add-new-child-at (fn [container child _ _] (class container)))
+(defmethod add-new-child-at Container [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
+(defmethod add-new-child-at JList [^JList jlist ^Component child constraints index]
+  (let [model (.getModel jlist)]
+    (println "jlist add-new-child-at" index "(model class:" (class model) " size =" (.getSize model) ")" child)
+    (.add model index child)
+    child))
+
+(defmulti remove-child-at (fn [container index] (class container)))
+(defmethod remove-child-at Container [c index] (.remove (.getContentPane c) index))
+(defmethod remove-child-at JList [jlist index] (println "JList remove-child-at not implemented yet"))
+
+(defmulti get-child-at (fn [container index] (class container)))
+(defmethod get-child-at Container [c index] (.getComponent (.getContentPane c) index))
+(defmethod get-child-at JList [jlist index]
+  (let [child
+        (-> jlist
+            (.getModel)
+            (.getElementAt index))]
+    (println "jlist get-child-at:" child)
+    child))
+; end :contents fns
+
+
 ; TODO: oops... I just added all the :class key-value pairs, but perhaps unnecessarilly. I did that so I could match
 ; the children to the virtual dom, but I don't need to do that. The diff will be between two virtual doms. After the
 ; diff is complete I should have a list of deletions, insertions, and changes (apply attributes) at particular indices.
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:frame      #(JFrame.)
+  {:button     #(JButton.)
+   :frame      #(JFrame.)
    :label      #(JLabel.)
-   :mig-layout #(MigLayout.)
-   :button     #(JButton.)}
+   :check-box  #(JCheckBox.)
+   :text-field #(JTextField.)
+   :list       create-jlist
+   :mig-layout #(MigLayout.)}
   #_{:frame      {:constructor #(JFrame.) :class JFrame}
      :label      {:constructor #(JLabel.) :class JLabel}
      :mig-layout {:constructor #(MigLayout.) :class MigLayout}
      :button     {:constructor #(JButton.) :class JButton}})
 
+(defn text-changed? [old-text new-text]
+  (not
+    (or (= old-text new-text)
+        ; empty string and nil are treated the same. See JTextComponent.setText().
+        (and (nil? old-text) (empty? new-text))
+        (and (empty? old-text) (nil? new-text)))))
+
 (def attr-appliers
   {:background         (fn set-background [c ctx color] (cond
                                                           (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
                                                           :else (.setBackground c (Color. color))))
+   :border             (fn set-border [c ctx border] (.setBorder c border))
+   ; The following doesn't appear to work. It may be that macOS overrides margins.
+   :margin             (fn set-margin [c ctx insets] (.setMargin c insets))
+   :height             set-height
+   :layout             (fn set-layout [c ctx layout]
+                         (pprint ctx)
+                         #_(get-in ctx [])
+                         (println "old layout:"
+                                  (try (.getLayout (.getContentPane c))
+                                       (catch NullPointerException e "none")))
+                         (println "new layout:" layout)
+                         (let [layout-component (build-ui (:app-ref ctx) layout)]
+                           (println "layout component:" layout-component)
+                           (println "setting layout for:" c)
+                           (.setLayout c layout-component))
+                         (println "layout set:" (.getLayout (.getContentPane c))))
    :opaque             (fn set-opaque [c ctx opaque] (cond
                                                        (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
                                                        :else (.setOpaque c opaque)))
-   :text               (fn set-text [c ctx text] (.setText c text))
-   :layout             (fn set-layout [c ctx layout] (.setLayout c (build-ui (:app-ref ctx) layout)))
+   :text               (fn set-text [c ctx text]
+                         #_(.printStackTrace (Exception. "stack trace"))
+                         (let [old-text (.getText c)]
+                           (println (str "new-text = \"" text "\" old-text = \"" old-text "\""))
+                           (println (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
+                           (when (text-changed? old-text text)
+                             (.setText c text))))
+   :width              set-width
+   :caret-position     (fn set-caret-position [c ctx position] (.setCaretPosition c position))
    ; TODO: if action not in on-close-action-map, then add it as a WindowListener to the close event
    :on-close           (fn on-close [c ctx action] (.setDefaultCloseOperation c (on-close-action-map action)))
    :layout-constraints (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
+   :row-constraints    (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
+   :column-constraints (fn set-column-constraints [c ctx constraints] (.setColumnConstraints c constraints))
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
    :on-action          (fn on-action [c ctx action-handler]
                          (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
                          (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
                                                                         (action-handler (:app-ref ctx) action-event)))))
+   :on-text-change     (fn on-text-change [c ctx text-change-handler]
+                         #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
+                             (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
+                         (.addDocumentListener (.getDocument c)
+                                               (reify-document-listener-to-text-change-listener
+                                                 (fn text-change-handler-clojure [doc-event]
+                                                   (text-change-handler (:app-ref ctx) (.getText c))))))
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:
@@ -88,10 +186,10 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents           {:get-existing-children (fn get-existing-children [c] (.getComponents (.getContentPane c)))
-                        :add-new-child-at      (fn add-new-child-at [^Container c ^Component child index] (.add ^Container (.getContentPane c) child ^int index))
-                        :remove-child-at       (fn remove-child-at [c index] (.remove (.getContentPane c) index))
-                        :get-child-at          (fn get-child-at [c index] (.getComponent (.getContentPane c) index))}
+   :contents           {:get-existing-children get-existing-children #_(fn get-existing-children [c] (.getComponents (.getContentPane c)))
+                        :add-new-child-at      add-new-child-at #_(fn add-new-child-at [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
+                        :remove-child-at       remove-child-at #_(fn remove-child-at [c index] (.remove (.getContentPane c) index))
+                        :get-child-at          get-child-at #_(fn get-child-at [c index] (.getComponent (.getContentPane c) index))}
    })
 
 (defn children-applier?
@@ -125,7 +223,7 @@
                  (range))]
       #_(println "child component (" index "):" (get-child-at component index))
       (cond
-        (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) index)
+        (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
 
         ; TODO: remove children that aren't in new-children
         ; TODO: check that identity (class name) match before applying attributes, otherwise, remove and add new child
@@ -136,27 +234,29 @@
   [{:keys [component app-ref old-view new-view]}]
   (if (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
-      (if-let [attr-applier (get attr-appliers attr)]
+      (when-let [attr-applier (get attr-appliers attr)]
+        #_(println "attr-applier" attr-applier)
         (cond
           ; TODO: these should not be done within an atom swap! Because they are side effects. Instead, accumulate them
           ; as a list of fns to apply after the swap is complete. In addition, the new view state should be kept with
           ; this list of fns and the atom should be updated with the new view state when a successful update occurs
           ; tic-tok cycle of swaps on the atom...
-          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI every be that deeply
+          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
           ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
           ; to be moved to apply-attributes or recursive itself.
           (children-applier? attr-applier) (apply-children-applier attr-applier component {:app-ref app-ref} attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component.
-          :else (do
+          :else (when (not (= (get old-view attr) (get new-view attr)))
                   #_(println "applying attribute " attr " with value " (get new-view attr))
-                  (attr-applier component {:app-ref app-ref} (get new-view attr)))))))
+                  (println "applying" attr-applier (get new-view attr))
+                  (attr-applier component {:app-ref app-ref :new-view new-view} (get new-view attr)))))))
   component)
 
 (defn instantiate-class
   [ui]
   (let [id (:class ui)
-        ;_ (println "instatiating" id)
+        ;_ (println "instantiating" id)
         constructor (get-in class-map [(:class ui) #_:constructor])
         component (constructor)]
     #_(println "component: " component)
@@ -170,39 +270,128 @@
   (let [component (instantiate-class view)]
     (apply-attributes {:component component :app-ref app-ref :new-view view})))
 
-(defn update-view
+(defn update-view [app-ref app-value]
+  (let [render (get-in app-value [:app :render])
+        _ (log/info "app-ref:" app-ref)
+        _ (log/info "render:" render)
+        new-view (render app-ref app-value)]
+    (assoc app-value :current-view new-view)))
+
+(def update-view-count (atom 0))
+(defn app-watch
   [watch-key app-ref old-value new-value]
-  ; TODO: "mount" is not an appropriate term, I took this from React. "create" would be better. Think about it.
-  ; Component did mount
-  (when (and (not (contains? old-value :root-component))
-             (contains? new-value :root-component))
-    (println "LIFECYCLE: root component mounted.")
-    (let [component-did-mount (get-in new-value [:app :component-did-mount])
-          component (:root-component new-value)]
-      (component-did-mount component app-ref new-value)))
-  ; Update
-  (when (not= (:state old-value) (:state new-value))
-    (println "LIFECYCLE: state changed. updating.")
-    (let [app (:app new-value)
-          render (:render app)
-          old-view (:current-view old-value)
-          new-view (render app-ref new-value)]
-      (pprint (diff old-view new-view))
-      (if-let [root-component (:root-component new-value)]
-        ; root component exists, update it
-        (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
-            #_(pprint new-view)
-            (swap! app-ref assoc :current-view new-view))
-        ; root component does not exist, create it and associate it ("mount" it)
-        (let [root-component (build-ui app-ref new-view)]
-          (swap! app-ref assoc :root-component root-component :current-view new-view))))))
+  (let [local-update-view-count (swap! update-view-count inc)]
+    (println local-update-view-count "text from state:" (get-in new-value [:state :new-todo-item-text]) "text from label:" (get-in new-value [:current-view :contents 1 :text]))
+    (do                                                       ;fn update-view-runnable []
+      ; TODO: "mount" is not an appropriate term, I took this from React. "create" would be better. Think about it.
+      ; Component did mount
+      (when (and (not (contains? old-value :root-component))
+                 (contains? new-value :root-component))
+        (println local-update-view-count "LIFECYCLE: root component mounted.")
+        (let [component-did-mount (get-in new-value [:app :component-did-mount])
+              component (:root-component new-value)]
+          (component-did-mount component app-ref new-value)))
+      ; Update view
+      (when (not= (:state old-value) (:state new-value))
+        (println local-update-view-count "LIFECYCLE: state changed. updating view.")
+        (swap! app-ref (partial update-view app-ref))
+        ; TODO: correct the following. It's wrong. It is not thread safe.
+        ; Here's why.
+        ; apply-attributes actually updates the UI on screen
+        ; The following `swap!` updates the view data in app-ref to match what's onscreen. But that swap! doesn't
+        ; execute until sometime later.
+        ; In between the two there is potential for additional swaps to occur. These additional swaps will notice the
+        ; old-view and new-view are different and apply-attributes again. This is actually happening.
+        ; Instead of all that... I need to have apply-attributes be a side effect of the swap of current-view. Perhaps
+        ; I need to save the arguments for apply-attributes along with the swap of the current-view.
+        ; I'm pretty user update-view can be called concurrently. So if multiple changes are made to app-ref unrelated
+        ; to the view then a previous change related the view might be applied multiple times and there's no way to
+        ; stop update-view from running simultaneous multiple modifications.
+        ; Therefore, I need another updater thread/agent/atom or something.
+        ; Also, syncing the onscreen updates with the app-ref updates will be a thing.
+        ; Channels are also a solution.
+        ; Sequence of events:
+        ; - app-ref changes
+        ; - triggers update-view (doesn't have to be in the "watch" of the atom, but does have to be triggered from the
+        ;   watch)
+        ; - atomically update UI on screen and view data
+        ;   - calc new view
+        ;   - diff old and new view
+        ;   - update view on screen
+        ;   - update view data
+        ;   - I believe the calc new view and diff can happen non-atomically?
+        ; The problem with this is ensuring the onscreen updates happen once and only once and knowing that they
+        ; actually happened. For instance, one solution I thought of - that won't work - is to store the list of
+        ; onscreen updates in the app-ref, then execute them in the watch. But still... those updates must be removed
+        ; from app-ref before the next watch is executed and there's no way to guarantee that.
+        ; I'm thinking an agent may be what's needed here.
+        ; async channels should also work.
+        ; Or possibly Manifold.
+        ; Ok... how about this...
+        ; Render the view here in update-view.
+        ; - if the view has changed, _don't update UI onscreen_, instead, just swap! view in app-ref
+        ; - on the next update-view the old-value and new-value will show two different :current-view values. That's
+        ;   the indicator to update the UI onscreen.
+        ; * think about what should happen in the swap and what should happen in update-view. I think more should
+        ;   happen in the swap. That way if swap needs to be rerun, it will have updated values.
+        ; A problem here is that multiple update-view calls may happen concurrently. If multiple calls have view updates
+        ; then those view updates may happen out of sync, which would not render the correct view in some cases.
+        ; - swap in the :new-view
+        ;   - swap in as many :new-views as the application wants
+        ; - in concurrent sequential process
+        ;   - diff between :current-view and :new-view triggers UI updates
+        ;   - completion of UI updates triggers :current-view update
+        ;   - remove :new-view
+        ; huh... forget about swapping in :new-view, that just adds complexity. Just calculate :new-view in the
+        ; concurrent sequential process
+        (let [app (:app new-value)
+              render (:render app)
+              old-view (:current-view old-value)
+              new-view (render app-ref new-value)]
+          (println local-update-view-count "state diff")
+          (pprint (diff old-view new-view))
+          (if-let [root-component (:root-component new-value)]
+            ; root component exists, update it
+            (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
+                #_(pprint new-view)
+                (swap! app-ref assoc :current-view new-view))
+            ; root component does not exist, create it and associate it ("mount" it)
+            (let [root-component (build-ui app-ref new-view)]
+              (swap! app-ref assoc :root-component root-component :current-view new-view))))))))
+
+; for debugging
+(defn print-components [root]
+  (when (instance? Container root)
+    (doseq [child (.getComponents root)]
+      (println child)
+      (print-components child))))
+
+; for debugging
+(defn find-component
+  ([children root predicate-fn]
+   (println "  iterating over children" children)
+   (let [matching-child (find-component (first children) predicate-fn)]
+     (cond
+       matching-child matching-child
+       (< 1 (count children)) (find-component (rest children) root predicate-fn)
+       :else nil)))
+  ([root predicate-fn]
+   (println "testing" root)
+   (cond
+     (nil? root) nil
+     (predicate-fn root) root
+     (instance? Container root) (find-component (.getComponents root) root predicate-fn)
+     :else nil)))
 
 (defn run-app
   [app]
+  (log/info "run-app started, test logger works")
   (let [constructor (get app :constructor (fn default-constructor [props] {}))
         props {}                                            ; TODO: set props... to what I don't know... maybe this is just a React thing
         app-ref (atom {})]
-    (add-watch app-ref :swing-react-update update-view)
+    ; Store app-ref in global app-refs vector for use on repl and debugging.
+    (swap! app-refs conj app-ref)
+    (add-watch app-ref :swing-react-watch app-watch)
     (swap! app-ref assoc :state (constructor props)         ; domain state
            :app app)
     (let [app-value @app-ref

@@ -15,6 +15,10 @@ plugins {
 repositories {
     // Use Maven Central for resolving dependencies.
     mavenCentral()
+    maven {
+        name "Clojars"
+        url "https://repo.clojars.org"
+    }
 }
 
 dependencies {
@@ -22,7 +26,8 @@ dependencies {
 
     implementation 'org.clojure:clojure:1.10.3'
     implementation 'com.miglayout:miglayout-swing:11.0'
-
+    implementation 'org.clojure:tools.logging:1.2.4'
+    implementation 'manifold:manifold:0.2.4'
 }
 
 application {

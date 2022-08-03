@@ -19,6 +19,11 @@ Run the REPL then execute the following.
 
 # Left Off
 
+I added Manifold to the project and created a dropping stream to receive events when the state has changed.
+
+Next: make this CSP (concurrent sequential process) actually rerender the view, update the UI, and update the
+:current-view key. The CSP needs its own thread which I must start. Manifold doesn't do any threading.
+
 I just finished making the atom contain Swing React data so that we can have a root component, virtual DOM, and other
 stuff.
 

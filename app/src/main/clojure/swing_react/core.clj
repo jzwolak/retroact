@@ -3,7 +3,8 @@
             [clojure.pprint :refer [pprint]]
             [swing-react.jlist :refer [create-jlist]]
             [clojure.tools.logging :as log]
-            [manifold.stream :as ms])
+            [manifold.stream :as ms]
+            [swing-react.manifold-support :as mss])
   (:import (java.awt Color Button Container Component Dimension)
            (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities)
            (net.miginfocom.swing MigLayout)
@@ -277,6 +278,48 @@
         new-view (render app-ref app-value)]
     (assoc app-value :current-view new-view)))
 
+; TODO: because this is a dropping stream and the app-ref is put into this stream, only one app can run at a time.
+; Fixed. I create a stream per app. I still put the app-ref on the stream... though technically this shouldn't even
+; be necessary anymore because there is also a thread per app.
+#_(def update-view-stream (mss/dropping-stream 1))
+
+(defn update-view-consumer [deferred-app-ref]
+  ; No need to worry about async changes to app-ref, just get the most recent val and use it. If there are async changes
+  ; they will be detected on subsequent calls. Subsequent calls will be made because they will be queued up in the
+  ; stream. If the render fn returns the same view data then no need to update UI. If render fn returns diff view data
+  ; then UI needs to be updated again, no problem.
+  (let [_ (log/info "update-view-consumer got" deferred-app-ref)
+        app-ref @deferred-app-ref
+        app-val @app-ref
+        render (get-in app-val [:app :render])
+        old-view (:current-view app-val)
+        new-view (render app-ref app-val)]
+    (if-let [root-component (:root-component app-val)]
+      ; root component exists, update it
+      ; TODO: somehow do the following two atomically. And only if the UI update succedes, update the app-ref.
+      ; TODO: can UI update be rolled back?? That would only be possible if UI state is read from Swing and not assumed
+      ; based on :current-view. I currently assume UI state from :current-view.
+      ; Perhaps it can be multi-staged: assume for performance, if fail, read from Swing, if still fail, render from
+      ; scratch. If still fail... fail back to previous.
+      (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
+          #_(pprint new-view)
+          (swap! app-ref assoc :current-view new-view))
+      ; root component does not exist, create it and associate it ("mount" it)
+      (let [root-component (build-ui app-ref new-view)]
+        (swap! app-ref assoc :root-component root-component :current-view new-view))))
+  )
+
+; TODO: start this in a thread. Hmmm... using ms/consume should be enough.
+(defn watch-for-update-view [app-ref]
+  (let [update-view-stream (get-in @app-ref [:swing-react :update-view-stream])
+        thread (Thread. ^Runnable
+                        (fn update-view-consumer-fn []
+                          (loop []
+                            (let [dval (ms/take! update-view-stream)]
+                              (update-view-consumer dval))
+                            (recur))))]
+    (.start thread)))
+
 (def update-view-count (atom 0))
 (defn app-watch
   [watch-key app-ref old-value new-value]
@@ -294,70 +337,9 @@
       ; Update view
       (when (not= (:state old-value) (:state new-value))
         (println local-update-view-count "LIFECYCLE: state changed. updating view.")
-        (swap! app-ref (partial update-view app-ref))
-        ; TODO: correct the following. It's wrong. It is not thread safe.
-        ; Here's why.
-        ; apply-attributes actually updates the UI on screen
-        ; The following `swap!` updates the view data in app-ref to match what's onscreen. But that swap! doesn't
-        ; execute until sometime later.
-        ; In between the two there is potential for additional swaps to occur. These additional swaps will notice the
-        ; old-view and new-view are different and apply-attributes again. This is actually happening.
-        ; Instead of all that... I need to have apply-attributes be a side effect of the swap of current-view. Perhaps
-        ; I need to save the arguments for apply-attributes along with the swap of the current-view.
-        ; I'm pretty user update-view can be called concurrently. So if multiple changes are made to app-ref unrelated
-        ; to the view then a previous change related the view might be applied multiple times and there's no way to
-        ; stop update-view from running simultaneous multiple modifications.
-        ; Therefore, I need another updater thread/agent/atom or something.
-        ; Also, syncing the onscreen updates with the app-ref updates will be a thing.
-        ; Channels are also a solution.
-        ; Sequence of events:
-        ; - app-ref changes
-        ; - triggers update-view (doesn't have to be in the "watch" of the atom, but does have to be triggered from the
-        ;   watch)
-        ; - atomically update UI on screen and view data
-        ;   - calc new view
-        ;   - diff old and new view
-        ;   - update view on screen
-        ;   - update view data
-        ;   - I believe the calc new view and diff can happen non-atomically?
-        ; The problem with this is ensuring the onscreen updates happen once and only once and knowing that they
-        ; actually happened. For instance, one solution I thought of - that won't work - is to store the list of
-        ; onscreen updates in the app-ref, then execute them in the watch. But still... those updates must be removed
-        ; from app-ref before the next watch is executed and there's no way to guarantee that.
-        ; I'm thinking an agent may be what's needed here.
-        ; async channels should also work.
-        ; Or possibly Manifold.
-        ; Ok... how about this...
-        ; Render the view here in update-view.
-        ; - if the view has changed, _don't update UI onscreen_, instead, just swap! view in app-ref
-        ; - on the next update-view the old-value and new-value will show two different :current-view values. That's
-        ;   the indicator to update the UI onscreen.
-        ; * think about what should happen in the swap and what should happen in update-view. I think more should
-        ;   happen in the swap. That way if swap needs to be rerun, it will have updated values.
-        ; A problem here is that multiple update-view calls may happen concurrently. If multiple calls have view updates
-        ; then those view updates may happen out of sync, which would not render the correct view in some cases.
-        ; - swap in the :new-view
-        ;   - swap in as many :new-views as the application wants
-        ; - in concurrent sequential process
-        ;   - diff between :current-view and :new-view triggers UI updates
-        ;   - completion of UI updates triggers :current-view update
-        ;   - remove :new-view
-        ; huh... forget about swapping in :new-view, that just adds complexity. Just calculate :new-view in the
-        ; concurrent sequential process
-        (let [app (:app new-value)
-              render (:render app)
-              old-view (:current-view old-value)
-              new-view (render app-ref new-value)]
-          (println local-update-view-count "state diff")
-          (pprint (diff old-view new-view))
-          (if-let [root-component (:root-component new-value)]
-            ; root component exists, update it
-            (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
-                #_(pprint new-view)
-                (swap! app-ref assoc :current-view new-view))
-            ; root component does not exist, create it and associate it ("mount" it)
-            (let [root-component (build-ui app-ref new-view)]
-              (swap! app-ref assoc :root-component root-component :current-view new-view))))))))
+        (let [update-view-stream (get-in @app-ref [:swing-react :update-view-stream])]
+          (ms/put! update-view-stream app-ref))
+        ))))
 
 ; for debugging
 (defn print-components [root]
@@ -384,17 +366,18 @@
      :else nil)))
 
 (defn run-app
-  [app]
-  (log/info "run-app started, test logger works")
-  (let [constructor (get app :constructor (fn default-constructor [props] {}))
-        props {}                                            ; TODO: set props... to what I don't know... maybe this is just a React thing
-        app-ref (atom {})]
-    ; Store app-ref in global app-refs vector for use on repl and debugging.
-    (swap! app-refs conj app-ref)
-    (add-watch app-ref :swing-react-watch app-watch)
-    (swap! app-ref assoc :state (constructor props)         ; domain state
-           :app app)
-    (let [app-value @app-ref
-          component-did-mount (get-in app-value [:app :component-did-mount] (fn default-component-did-mount [component app-ref app-value]))]
-      (component-did-mount (:root-component app-value) app-ref app-value))
-    ))
+  "Run the application defined by app. Once the application is started run-app will return. Optional props may be passed
+  as the second arg and will be passed through to the app constructor."
+  ([app] (run-app app {}))
+  ([app props]
+   (log/info "run-app started, test logger works")
+   (let [constructor (get app :constructor (fn default-constructor [props] {}))
+         app-ref (atom {:swing-react {:update-view-stream (mss/dropping-stream 1)}})]
+     ; Store app-ref in global app-refs vector for use on repl and debugging.
+     (swap! app-refs conj app-ref)
+     (watch-for-update-view app-ref)
+     (add-watch app-ref :swing-react-watch app-watch)
+     (swap! app-ref assoc
+            :state (constructor props)                      ; domain state
+            :app app)
+     )))

@@ -296,7 +296,7 @@
         new-view (render app-ref app-val)]
     (if-let [root-component (:root-component app-val)]
       ; root component exists, update it
-      ; TODO: somehow do the following two atomically. And only if the UI update succedes, update the app-ref.
+      ; TODO: somehow do the following two atomically. And only if the UI update succeeds, update the app-ref.
       ; TODO: can UI update be rolled back?? That would only be possible if UI state is read from Swing and not assumed
       ; based on :current-view. I currently assume UI state from :current-view.
       ; Perhaps it can be multi-staged: assume for performance, if fail, read from Swing, if still fail, render from

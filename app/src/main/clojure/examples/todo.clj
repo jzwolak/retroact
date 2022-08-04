@@ -1,5 +1,5 @@
 (ns examples.todo
-  (:require [swing-react.core :refer [run-app]])
+  (:require [retroact.core :refer [run-app]])
   (:import (java.awt Color Insets)
            (javax.swing.border LineBorder)
            (javax.swing BorderFactory)))

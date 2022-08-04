@@ -1,4 +1,4 @@
-(ns swing-react.manifold-support
+(ns retroact.manifold-support
   (:require [manifold.stream :as ms]
             [manifold.deferred :refer [let-flow]]))
 

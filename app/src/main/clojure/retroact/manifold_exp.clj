@@ -1,6 +1,6 @@
-(ns swing-react.manifold-exp
+(ns retroact.manifold-exp
   (:require [manifold.stream :as ms]
-            [swing-react.manifold-support :as mss]))
+            [retroact.manifold-support :as mss]))
 
 ; An experiment with manifold
 

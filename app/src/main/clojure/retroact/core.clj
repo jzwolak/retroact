@@ -1,10 +1,10 @@
-(ns swing-react.core
+(ns retroact.core
   (:require [clojure.data :refer [diff]]
             [clojure.pprint :refer [pprint]]
-            [swing-react.jlist :refer [create-jlist]]
+            [retroact.jlist :refer [create-jlist]]
             [clojure.tools.logging :as log]
             [manifold.stream :as ms]
-            [swing-react.manifold-support :as mss])
+            [retroact.manifold-support :as mss])
   (:import (java.awt Color Button Container Component Dimension)
            (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities)
            (net.miginfocom.swing MigLayout)
@@ -311,7 +311,7 @@
 
 ; TODO: start this in a thread. Hmmm... using ms/consume should be enough.
 (defn watch-for-update-view [app-ref]
-  (let [update-view-stream (get-in @app-ref [:swing-react :update-view-stream])
+  (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])
         thread (Thread. ^Runnable
                         (fn update-view-consumer-fn []
                           (loop []
@@ -337,7 +337,7 @@
       ; Update view
       (when (not= (:state old-value) (:state new-value))
         (println local-update-view-count "LIFECYCLE: state changed. updating view.")
-        (let [update-view-stream (get-in @app-ref [:swing-react :update-view-stream])]
+        (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])]
           (ms/put! update-view-stream app-ref))
         ))))
 
@@ -372,11 +372,11 @@
   ([app props]
    (log/info "run-app started, test logger works")
    (let [constructor (get app :constructor (fn default-constructor [props] {}))
-         app-ref (atom {:swing-react {:update-view-stream (mss/dropping-stream 1)}})]
+         app-ref (atom {:retroact {:update-view-stream (mss/dropping-stream 1)}})]
      ; Store app-ref in global app-refs vector for use on repl and debugging.
      (swap! app-refs conj app-ref)
      (watch-for-update-view app-ref)
-     (add-watch app-ref :swing-react-watch app-watch)
+     (add-watch app-ref :retroact-watch app-watch)
      (swap! app-ref assoc
             :state (constructor props)                      ; domain state
             :app app)

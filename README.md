@@ -19,6 +19,12 @@ Run the REPL then execute the following.
 
 # Left Off
 
+TODO:
+* Make more like Swing Builder
+* Flatten project tree: don't use "app" sub project.
+* Don't use "application" plugin, use "java-library"
+* See if the above two make Gradle composite build work.
+
 I added Manifold to the project and created a dropping stream to receive events when the state has changed.
 
 Next: make this CSP (concurrent sequential process) actually rerender the view, update the UI, and update the

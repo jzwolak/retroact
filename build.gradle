@@ -1,0 +1,42 @@
+
+plugins {
+    id "dev.clojurephant.clojure" version "0.6.0"
+    id "java-library"
+}
+
+version = "0.0.1"
+group = "com.insilicalabs"
+
+repositories {
+    // Use Maven Central for resolving dependencies.
+    mavenCentral()
+    maven {
+        name "Clojars"
+        url "https://repo.clojars.org"
+    }
+}
+
+dependencies {
+    /*
+     * The api configuration must be used in order for dependencies to be included in parent projects or composite
+     * builds.
+     * See https://github.com/clojurephant/clojurephant/issues/191
+     */
+    api 'org.clojure:clojure:1.10.3'
+    api 'com.miglayout:miglayout-swing:11.0'
+    api 'org.clojure:tools.logging:1.2.4'
+    api 'manifold:manifold:0.2.4'
+    api 'org.clojure:core.async:1.5.648'
+}
+
+/*
+ * The following allows dependencies of this project to propagate to parent projects and Clojurephant. This is one
+ * approach. Another can be seen in the github issue link below.
+ *
+ * See https://github.com/clojurephant/clojurephant/issues/191
+ */
+/*
+configurations.apiElements {
+    extendsFrom(configurations.implementation)
+}
+*/

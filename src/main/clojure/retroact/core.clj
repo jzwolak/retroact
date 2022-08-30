@@ -1,12 +1,14 @@
 (ns retroact.core
   (:require [clojure.data :refer [diff]]
             [clojure.pprint :refer [pprint]]
+            [clojure.set :refer [difference]]
             [retroact.jlist :refer [create-jlist]]
             [clojure.tools.logging :as log]
             [manifold.stream :as ms]
+            [clojure.core.async :refer [chan sliding-buffer >!! <!! alt!! buffer go-loop alt! go >! alts!!]]
             [retroact.manifold-support :as mss])
   (:import (java.awt Color Button Container Component Dimension)
-           (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities)
+           (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities JPanel)
            (net.miginfocom.swing MigLayout)
            (java.awt.event ActionListener)
            (javax.swing.event DocumentListener)))
@@ -43,7 +45,7 @@
 
 (declare build-ui)
 
-(def app-refs (atom []))
+(defonce app-refs (atom []))
 
 (def on-close-action-map
   {:dispose JFrame/DISPOSE_ON_CLOSE
@@ -73,6 +75,8 @@
 
 ; :contents fns
 (defmulti get-existing-children class)
+; TODO: .getContentPane should probably only be called for Window (JFrame) components, not JPanel and Container
+; components
 (defmethod get-existing-children Container [c] (.getComponents (.getContentPane c)))
 (defmethod get-existing-children JList [jlist]
   (let [model (.getModel jlist)]
@@ -112,7 +116,10 @@
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:button     #(JButton.)
+  {:default    (fn default-swing-component-constructor []
+                 (log/warn "using default constructor to generatoe a JPanel")
+                 (JPanel.))
+   :button     #(JButton.)
    :frame      #(JFrame.)
    :label      #(JLabel.)
    :check-box  #(JCheckBox.)
@@ -223,6 +230,7 @@
                  (pad new-children max-children)
                  (range))]
       #_(println "child component (" index "):" (get-child-at component index))
+      (log/info "child index" index "| old-child =" old-child "| new-child =" new-child)
       (cond
         (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
 
@@ -233,6 +241,7 @@
 
 (defn apply-attributes
   [{:keys [component app-ref old-view new-view]}]
+  (log/info "applying attributes" (:class new-view))
   (if (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
       (when-let [attr-applier (get attr-appliers attr)]
@@ -257,9 +266,13 @@
 (defn instantiate-class
   [ui]
   (let [id (:class ui)
-        ;_ (println "instantiating" id)
-        constructor (get-in class-map [(:class ui) #_:constructor])
+        constructor (get-in class-map [(:class ui) #_:constructor]
+                            (fn default-onscreen-component-constructor []
+                              (log/error "could not find constructor for" id "using default constructor")
+                              (log/info "full view =" ui)
+                              (get class-map :default)))
         component (constructor)]
+    (log/info (Exception. "stacktrace") "created" id)
     #_(println "component: " component)
     component))
 
@@ -309,13 +322,42 @@
         (swap! app-ref assoc :root-component root-component :current-view new-view))))
   )
 
+(defn update-view-main-loop [add-uv-chan]
+  ; What I want to do:
+  ; Store a local vector of update-view-stream's and use those streams with core.async (I'm going to change to
+  ; core.async, so it will be channels, not streams)
+  (loop [uv-chans []]
+    (alt!!
+      uv-chans ([app-ref uv-chan]
+                         ; do something with app-ref
+                         (let [new-uv-chans (if (= uv-chan (last uv-chans))
+                                              uv-chans
+                                              (conj (remove (= uv-chan) uv-chans) uv-chan))]
+                           (recur new-uv-chans)))
+      add-uv-chan ([uv-chan] (recur (conj uv-chans uv-chan))))))
+
+(def update-view-thread (atom nil))
+(defn start-retroact-main-thread [app-ref]
+  (compare-and-set!
+    update-view-thread
+    nil
+    (let [thread (Thread. update-view-main-loop)]
+      (.start thread)
+      thread)))
+
 ; TODO: start this in a thread. Hmmm... using ms/consume should be enough.
+; TODO: actually, only start one thread, and have that thread check all open update-view-streams. This fn should then
+;       add each update-view-stream to the list of streams to check.
+; I want to use a single thread so that there won't be lots of threads - one for every component.
 (defn watch-for-update-view [app-ref]
-  (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])
+  (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])]
+    ; TODO: put stream on chan to be added to update-view-main-loop alts!
+    )
+  #_(let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])
         thread (Thread. ^Runnable
                         (fn update-view-consumer-fn []
                           (loop []
-                            (let [dval (ms/take! update-view-stream)]
+                            (let [dval (<!! update-view-stream)]
                               (update-view-consumer dval))
                             (recur))))]
     (.start thread)))
@@ -338,8 +380,37 @@
       (when (not= (:state old-value) (:state new-value))
         (println local-update-view-count "LIFECYCLE: state changed. updating view.")
         (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])]
-          (ms/put! update-view-stream app-ref))
+          (>!! update-view-stream app-ref))
         ))))
+
+(defn component-did-mount? [old-value new-value]
+  (let [old-components (get old-value :components {})
+        new-components (get new-value :components {})]
+    (if (not= old-components new-components)
+      (filter (fn is-component-mounted? [comp]
+                (let [comp-id (:id comp)
+                      old-onscreen-comp (get-in old-components [comp-id :onscreen-component])
+                      onscreen-comp (get comp :onscreen-component)]
+                  (and (nil? old-onscreen-comp) (not (nil? onscreen-comp)))))
+              (vals new-components)))))
+
+(defn- trigger-update-view [app-ref new-value]
+  (go (>! (get-in new-value [:retroact :update-view-chan]) app-ref)))
+
+(defn app-watch-2
+  [watch-key app-ref old-value new-value]
+  (let [local-update-view-count (swap! update-view-count inc)]
+    (log/info "update-view-count =" local-update-view-count)
+    ; Component did mount
+    (when-let [mounted-components (component-did-mount? old-value new-value)]
+      (log/info "components mounted: " mounted-components)
+      (doseq [comp mounted-components]
+        (log/info "calling component-did-mount for" comp)
+        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
+          (component-did-mount (:onscreen-component comp) app-ref new-value))))
+    ; Update view
+    (when (not= (:state old-value) (:state new-value))
+      (trigger-update-view app-ref new-value))))
 
 ; for debugging
 (defn print-components [root]
@@ -365,6 +436,11 @@
      (instance? Container root) (find-component (.getComponents root) root predicate-fn)
      :else nil)))
 
+; Okay, how about this instead of the todo items below. Create an "app" that contains the necessary channels for
+; overhead and administration of the app... including the stream update channel stuff. Then components are mounted in
+; the app. Multiple components (or just one) may be mounted in the app. The app is an atom of a map.
+; TODO: consider renaming to `mount-component` or something because it may not be a full app and may just be JPanel.
+; TODO: Also, consider returning the root component or a future/deferred to get the root component when it's ready.
 (defn run-app
   "Run the application defined by app. Once the application is started run-app will return. Optional props may be passed
   as the second arg and will be passed through to the app constructor."
@@ -372,7 +448,9 @@
   ([app props]
    (log/info "run-app started, test logger works")
    (let [constructor (get app :constructor (fn default-constructor [props] {}))
-         app-ref (atom {:retroact {:update-view-stream (mss/dropping-stream 1)}})]
+         ; Each component needs its own dropping stream so that one update may be stored for each component
+         ; simultaneously without being lost.
+         app-ref (atom {:retroact {:update-view-stream (chan (sliding-buffer 1))}})]
      ; Store app-ref in global app-refs vector for use on repl and debugging.
      (swap! app-refs conj app-ref)
      (watch-for-update-view app-ref)
@@ -381,3 +459,152 @@
             :state (constructor props)                      ; domain state
             :app app)
      )))
+
+; TODO: FORGET IT ALL! Rather, the idea about threads and channels for the main loop.
+; I just looked at how core.async does it and the delay and defprotocol fns are used along with defonce. This seems like
+; a good approach for Retroact, too. I can create an executor service with a single thread (not a thread pool). Use a
+; (defonce exec-service (delay ...)) to make it defined once and only when first used. @exec-service will use it. A
+; similar approach may be used for starting the main loop (defonce start-main-loop (delay (main-loop))). Starting of
+; the main loop will create a tiny bit of overhead each time a component is created or an app is initialized, depending
+; on how I do it. But that should not be a big deal. What (main-loop) returns may actually be the channel it is
+; listening on to get commands from the app. How cool is that! Perhaps I call it "main-chan" instead of
+; "start-main-loop" then.
+
+(defn- update-onscreen-component [{:keys [app-ref onscreen-component old-view new-view]}]
+  (let [onscreen-component (or onscreen-component (do (log/info "building ui for" (:class new-view)) (instantiate-class new-view)))]
+    ; TODO: change :component to :onscreen-component
+    (apply-attributes {:app-ref app-ref :component onscreen-component :old-view old-view :new-view new-view})
+    onscreen-component))
+
+(defn- get-render-fn [comp]
+  (get comp :render (fn default-render-fn [app-ref app-value]
+                      (log/warn "component did not provide a render fn"))))
+
+(defn- update-components [app-ref app components]
+  (reduce-kv
+    (fn render-onscreen-comp [m comp-id comp]
+      (log/info "update-components comp =" comp)
+      (let [render (get-render-fn comp)
+            view (get-in components [comp-id :view])
+            onscreen-component (get-in components [comp-id :onscreen-component])
+            new-view (render app-ref app)
+            onscreen-component (update-onscreen-component
+                                 {:app-ref  app-ref :onscreen-component onscreen-component
+                                  :old-view view :new-view new-view})]
+        (assoc m comp-id (assoc comp :view new-view :onscreen-component onscreen-component))))
+    {} (get app :components {})))
+
+(defn- retroact-main-loop [retroact-cmd-chan]
+  (log/info "STARTING RETROACT MAIN LOOP")
+  (loop [chans [retroact-cmd-chan]
+         chans->components {}]
+    (let [[val port] (alts!! chans :priority true)
+          cmd-name (if (vector? val) (first val) :update-view)]
+      (condp = cmd-name
+        :update-view (let [app-ref val
+                           update-view-chan port
+                           app @app-ref
+                           components (get chans->components update-view-chan {})
+                           next-components (update-components app-ref app components)
+                           next-chans->components (assoc chans->components update-view-chan next-components)]
+                       (log/info "main-loop components:      " components)
+                       (log/info "main-loop next-components: " next-components)
+                       ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
+                       ;   to be sure priority is set - I remember seeing that somewhere.
+                       ; - loop through all components in current app-ref.
+                       ; update-view-chan has app-ref for the app at the other end of it. There is one update-view-chan per app.
+                       ;
+                       ; No worries about map running outside swap!. The :view inside :components vector is only updated in this
+                       ; place and this place is sequential. In addition, changes to :state will always trigger another put to
+                       ; update-view-chan, which will cause this code to run again. In the worst case the code runs an extra time,
+                       ; not too few times.
+                       ; TODO: update docs. In fact, running the map ouside swap! is critical. Because I want to update view and
+                       ; the Swing components together. Once the two are updated I can call swap! and pass it the correct value of
+                       ; view and swap! will just rerun until it is set. The only problem I see here is that the user will have time
+                       ; to interact with the onscreen components before swap! finishes. But that really shouldn't be a problem
+                       ; because the only code that would be affected by such user actions would be the code right here and since this
+                       ; code is blocking until the swap! completes... there's no problem.
+                       (swap! app-ref assoc :components next-components)
+                       ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
+                       (recur chans next-chans->components))
+        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) chans->components))
+
+        :shutdown (do)                                      ; do nothing, will not recur
+        (log/error "unrecognized command to retroact-cmd-chan:" cmd-name))
+      )))
+
+(defn- retroact-main []
+  (let [retroact-cmd-chan (chan (buffer 100))
+        retroact-thread (Thread. (fn retroact-main-runnable [] (retroact-main-loop retroact-cmd-chan)))]
+    (.start retroact-thread)
+    retroact-cmd-chan))
+
+(defonce retroact-cmd-chan (delay (retroact-main)))
+
+(defn create-comp
+  "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
+   extreme cases there may be a couple hundred of these. In a typical case there will be between one component and a
+   half a dozen components. The code is optimized for a small number of top level components."
+  ([app-ref comp props]
+   (let [constructor (get comp :constructor (fn default-constructor [props state] state))
+         comp-id (keyword (gensym "comp"))
+         ; Add a unique id to ensure component map is unique. Side effects by duplicate components should
+         ; generate duplicate onscreen components and we need to be sure the data here is unique. Onscreen
+         ; components store Java reference in comp, but it won't be here immediately.
+         comp (assoc comp :id comp-id)]
+     ; No need to render comp view here because this will trigger the watch, which will render the view.
+     (swap! app-ref
+            (fn add-component-to-app [app]
+              (let [state (get app :state {})
+                    components (get app :components {})
+                    _ (println "props:" props)
+                    _ (println "state:" state)
+                    next-state (constructor props state)
+                    next-components (assoc components comp-id comp)]
+                (println "next-state:" next-state)
+                (println "components:      " components)
+                (println "next-components: " next-components)
+                (assoc app :state next-state :components next-components))))))
+  ([app-ref comp] (create-comp app-ref comp {})))
+
+; 2022-08-24
+; - Create fn to create component and mount it. Tow cases:
+;   - root component - return the component after it is created. The caller may then display it or add it to a legacy
+;     app.
+;   - child component - hmm... seems like the component should still be returned and the caller decides what to do with
+;     it. If it is a Retroact parent then the child will be added... if it's a legacy app parent, then also the child
+;     will be added. Or maybe for a Retroact parent the data that represents the view must be returned.
+; - watch for changes on the atom
+;   - each component will have a separate section for its state... right? As well as global app state??
+;   - when component is mounted, a section for its state is stored in the atom.
+; - rerun view render fns for each component who's state has changed.
+;   - what happens if a parent's state changes and the parent reruns a child with different props and the child's state
+;     had also changed the same time as the parent's state. What prevents the child from rerendering first then the
+;     parent calling the child's render fn again?
+
+; init-app may be outdated. ... I think I can still use this concept with the above 2022-08-24 ideas.
+(defn init-app
+  "Initialize app data as an atom and return the atom. The atom is wired in to necessary watches, core.async channels,
+   and any other fns and structures to make it functional and not just a regular atom. The result is an atom that is
+   reactive to changes according to FRP (Functional Reactive Programming). Components may subsequently be added to the
+   app. For convenience there is a single arg version of this fn that will create a component. Although nothing prevents
+   multiple calls to init-app and the code will work properly when multiple calls are made, init-app is intended to be
+   called once. The resources (including threads) allocated are done so as if this is for the entire application."
+  ([]
+   (let [update-view-chan (chan (sliding-buffer 1))
+         app-ref (atom {:retroact   {:retroact-cmd-chan @retroact-cmd-chan
+                                     :update-view-chan  update-view-chan}
+                        :components {}
+                        :state      {}})]
+     (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
+     (swap! app-refs conj app-ref)
+     ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
+     #_(start-retroact-main-thread app-ref)
+     (add-watch app-ref :retroact-watch app-watch-2)
+     app-ref))
+  ([comp] (init-app comp {}))
+  ([comp props]
+   (let [app-ref (init-app)]
+     (create-comp app-ref comp props)
+     app-ref))
+  )

@@ -11,17 +11,18 @@
 (defn greeter-app
   []
   {:constructor
-   (fn constructor [props]
-     ; return initial app-state. Not necessary if it's an empty map, but I'll put it here.
-     {})
+   (fn constructor [props state]
+     ; return unmodified app-state. Required and a best practice because other components may depend on the state.
+     state)
    ; TODO: possibly generify componentDidMount to be an event in response to state change. Code may need to execute when
    ; the state changes to pack again or revalidate or any number of other things. And the code may need to execute only
    ; if certain parts of the state changed. Like `pack()` may only execute if visibility goes from false to true. Having
    ; a way to handle this concisely and generically would be amazing!
    :component-did-mount
-   (fn component-did-mount [component app-ref app-value]
-     (.pack component)
-     (.setVisible component true))
+   (fn component-did-mount [onscreen-component app-ref app-value]
+     (println "greeter app did mount")
+     (.pack onscreen-component)
+     (.setVisible onscreen-component true))
    ; Called when a child is added, removed or "swapped". A swap is when a child is removed and a new one is added in its
    ; place.
    ; TODO: this is not implemented yet.

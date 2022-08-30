@@ -1,17 +1,13 @@
 (ns retroact.core
-  (:require [clojure.data :refer [diff]]
+  (:require [clojure.core.async :refer [>! alt!! alts!! buffer chan go sliding-buffer]]
             [clojure.pprint :refer [pprint]]
-            [clojure.set :refer [difference]]
-            [retroact.jlist :refer [create-jlist]]
             [clojure.tools.logging :as log]
-            [manifold.stream :as ms]
-            [clojure.core.async :refer [chan sliding-buffer >!! <!! alt!! buffer go-loop alt! go >! alts!!]]
-            [retroact.manifold-support :as mss])
-  (:import (java.awt Color Button Container Component Dimension)
-           (javax.swing JFrame JLabel JButton JTextField JTree JList DefaultListModel JCheckBox SwingUtilities JPanel)
-           (net.miginfocom.swing MigLayout)
+            [retroact.jlist :refer [create-jlist]])
+  (:import (java.awt Color Component Container Dimension)
            (java.awt.event ActionListener)
-           (javax.swing.event DocumentListener)))
+           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JTextField)
+           (javax.swing.event DocumentListener)
+           (net.miginfocom.swing MigLayout)))
 
 ; Open questions:
 ;
@@ -272,7 +268,7 @@
                               (log/info "full view =" ui)
                               (get class-map :default)))
         component (constructor)]
-    (log/info (Exception. "stacktrace") "created" id)
+    (log/info "created" id)
     #_(println "component: " component)
     component))
 
@@ -283,44 +279,6 @@
   [app-ref view]
   (let [component (instantiate-class view)]
     (apply-attributes {:component component :app-ref app-ref :new-view view})))
-
-(defn update-view [app-ref app-value]
-  (let [render (get-in app-value [:app :render])
-        _ (log/info "app-ref:" app-ref)
-        _ (log/info "render:" render)
-        new-view (render app-ref app-value)]
-    (assoc app-value :current-view new-view)))
-
-; TODO: because this is a dropping stream and the app-ref is put into this stream, only one app can run at a time.
-; Fixed. I create a stream per app. I still put the app-ref on the stream... though technically this shouldn't even
-; be necessary anymore because there is also a thread per app.
-#_(def update-view-stream (mss/dropping-stream 1))
-
-(defn update-view-consumer [deferred-app-ref]
-  ; No need to worry about async changes to app-ref, just get the most recent val and use it. If there are async changes
-  ; they will be detected on subsequent calls. Subsequent calls will be made because they will be queued up in the
-  ; stream. If the render fn returns the same view data then no need to update UI. If render fn returns diff view data
-  ; then UI needs to be updated again, no problem.
-  (let [_ (log/info "update-view-consumer got" deferred-app-ref)
-        app-ref @deferred-app-ref
-        app-val @app-ref
-        render (get-in app-val [:app :render])
-        old-view (:current-view app-val)
-        new-view (render app-ref app-val)]
-    (if-let [root-component (:root-component app-val)]
-      ; root component exists, update it
-      ; TODO: somehow do the following two atomically. And only if the UI update succeeds, update the app-ref.
-      ; TODO: can UI update be rolled back?? That would only be possible if UI state is read from Swing and not assumed
-      ; based on :current-view. I currently assume UI state from :current-view.
-      ; Perhaps it can be multi-staged: assume for performance, if fail, read from Swing, if still fail, render from
-      ; scratch. If still fail... fail back to previous.
-      (do (apply-attributes {:app-ref app-ref :component root-component :old-view old-view :new-view new-view})
-          #_(pprint new-view)
-          (swap! app-ref assoc :current-view new-view))
-      ; root component does not exist, create it and associate it ("mount" it)
-      (let [root-component (build-ui app-ref new-view)]
-        (swap! app-ref assoc :root-component root-component :current-view new-view))))
-  )
 
 (defn update-view-main-loop [add-uv-chan]
   ; What I want to do:
@@ -345,44 +303,6 @@
       (.start thread)
       thread)))
 
-; TODO: start this in a thread. Hmmm... using ms/consume should be enough.
-; TODO: actually, only start one thread, and have that thread check all open update-view-streams. This fn should then
-;       add each update-view-stream to the list of streams to check.
-; I want to use a single thread so that there won't be lots of threads - one for every component.
-(defn watch-for-update-view [app-ref]
-  (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])]
-    ; TODO: put stream on chan to be added to update-view-main-loop alts!
-    )
-  #_(let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])
-        thread (Thread. ^Runnable
-                        (fn update-view-consumer-fn []
-                          (loop []
-                            (let [dval (<!! update-view-stream)]
-                              (update-view-consumer dval))
-                            (recur))))]
-    (.start thread)))
-
-(def update-view-count (atom 0))
-(defn app-watch
-  [watch-key app-ref old-value new-value]
-  (let [local-update-view-count (swap! update-view-count inc)]
-    (println local-update-view-count "text from state:" (get-in new-value [:state :new-todo-item-text]) "text from label:" (get-in new-value [:current-view :contents 1 :text]))
-    (do                                                       ;fn update-view-runnable []
-      ; TODO: "mount" is not an appropriate term, I took this from React. "create" would be better. Think about it.
-      ; Component did mount
-      (when (and (not (contains? old-value :root-component))
-                 (contains? new-value :root-component))
-        (println local-update-view-count "LIFECYCLE: root component mounted.")
-        (let [component-did-mount (get-in new-value [:app :component-did-mount])
-              component (:root-component new-value)]
-          (component-did-mount component app-ref new-value)))
-      ; Update view
-      (when (not= (:state old-value) (:state new-value))
-        (println local-update-view-count "LIFECYCLE: state changed. updating view.")
-        (let [update-view-stream (get-in @app-ref [:retroact :update-view-stream])]
-          (>!! update-view-stream app-ref))
-        ))))
-
 (defn component-did-mount? [old-value new-value]
   (let [old-components (get old-value :components {})
         new-components (get new-value :components {})]
@@ -394,14 +314,22 @@
                   (and (nil? old-onscreen-comp) (not (nil? onscreen-comp)))))
               (vals new-components)))))
 
+(defn- missing-view?
+  "Check if any components are missing their :view."
+  [app-value]
+  nil)
+
 (defn- trigger-update-view [app-ref new-value]
   (go (>! (get-in new-value [:retroact :update-view-chan]) app-ref)))
+
+; Used for debugging, to count how many times app-watch is called.
+(def update-view-count (atom 0))
 
 (defn app-watch-2
   [watch-key app-ref old-value new-value]
   (let [local-update-view-count (swap! update-view-count inc)]
     (log/info "update-view-count =" local-update-view-count)
-    ; Component did mount
+    ; Component did mount (onscreen-component created)
     (when-let [mounted-components (component-did-mount? old-value new-value)]
       (log/info "components mounted: " mounted-components)
       (doseq [comp mounted-components]
@@ -409,7 +337,7 @@
         (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
           (component-did-mount (:onscreen-component comp) app-ref new-value))))
     ; Update view
-    (when (not= (:state old-value) (:state new-value))
+    (when (or (not= (:state old-value) (:state new-value)) (not= (:components old-value) (:components new-value)))
       (trigger-update-view app-ref new-value))))
 
 ; for debugging
@@ -436,29 +364,6 @@
      (instance? Container root) (find-component (.getComponents root) root predicate-fn)
      :else nil)))
 
-; Okay, how about this instead of the todo items below. Create an "app" that contains the necessary channels for
-; overhead and administration of the app... including the stream update channel stuff. Then components are mounted in
-; the app. Multiple components (or just one) may be mounted in the app. The app is an atom of a map.
-; TODO: consider renaming to `mount-component` or something because it may not be a full app and may just be JPanel.
-; TODO: Also, consider returning the root component or a future/deferred to get the root component when it's ready.
-(defn run-app
-  "Run the application defined by app. Once the application is started run-app will return. Optional props may be passed
-  as the second arg and will be passed through to the app constructor."
-  ([app] (run-app app {}))
-  ([app props]
-   (log/info "run-app started, test logger works")
-   (let [constructor (get app :constructor (fn default-constructor [props] {}))
-         ; Each component needs its own dropping stream so that one update may be stored for each component
-         ; simultaneously without being lost.
-         app-ref (atom {:retroact {:update-view-stream (chan (sliding-buffer 1))}})]
-     ; Store app-ref in global app-refs vector for use on repl and debugging.
-     (swap! app-refs conj app-ref)
-     (watch-for-update-view app-ref)
-     (add-watch app-ref :retroact-watch app-watch)
-     (swap! app-ref assoc
-            :state (constructor props)                      ; domain state
-            :app app)
-     )))
 
 ; TODO: FORGET IT ALL! Rather, the idea about threads and channels for the main loop.
 ; I just looked at how core.async does it and the delay and defprotocol fns are used along with defonce. This seems like

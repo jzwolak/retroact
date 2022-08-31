@@ -325,6 +325,7 @@
 ; Used for debugging, to count how many times app-watch is called.
 (def update-view-count (atom 0))
 
+;TODO: rename to app-watch. There's no need for the "-2" anymore.
 (defn app-watch-2
   [watch-key app-ref old-value new-value]
   (let [local-update-view-count (swap! update-view-count inc)]

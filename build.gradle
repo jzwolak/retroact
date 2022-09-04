@@ -2,10 +2,16 @@
 plugins {
     id "dev.clojurephant.clojure" version "0.6.0"
     id "java-library"
+    id 'maven-publish'
+    id 'signing'
 }
 
-version = "0.0.1"
+version = "0.1.0"
 group = "com.insilicalabs"
+
+
+// See Swing Builder for the publishing stuff to add here.
+// Try to publish to Clojars, not Maven Central.
 
 repositories {
     // Use Maven Central for resolving dependencies.
@@ -40,3 +46,68 @@ configurations.apiElements {
     extendsFrom(configurations.implementation)
 }
 */
+
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+publishing {
+    publications {
+        swingBuilder(MavenPublication) {
+            artifactId "retroact"
+            from components.java
+            // ensure dependency versions get locked at time of publication
+            versionMapping {
+                usage('java-api') {
+                    fromResolutionOf('runtimeClasspath')
+                }
+                usage('java-runtime') {
+                    fromResolutionResult()
+                }
+            }
+            pom {
+                name = 'Retroact'
+                description = 'An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.'
+                url = 'https://github.com/jzwolak/retroact'
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'jzwolak'
+                        name = 'Jason Zwolak'
+                        email = 'jzwolak@gmail.com'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/jzwolak/retroact.git'
+                    developerConnection = 'scm:git:ssh://github.com/jzwolak/retroact.git'
+                    url = 'https://github.com/jzwolak/retroact.git'
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            // file repo for testing:
+            name "buildDirRepo"
+            url = layout.buildDirectory.dir("repo")
+        }
+        if (project.hasProperty('clojarsUsername') && project.hasProperty('clojarsPassword')) {
+            maven {
+                name "Clojars"
+                url "https://clojars.org/repo"
+                credentials {
+                    username clojarsUsername
+                    password clojarsPassword
+                }
+            }
+        } else {
+            println "clojarsUsername or clojarsPassword not present. Publishing to maven central disabled."
+        }
+    }
+}

@@ -1,4 +1,6 @@
 # Retroact
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jzwolak/retroact/blob/main/LICENSE)
+[![Clojars Project](https://img.shields.io/clojars/v/com.insilicalabs/retroact.svg)](https://clojars.org/com.insilicalabs/retroact)
 
 An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.
 

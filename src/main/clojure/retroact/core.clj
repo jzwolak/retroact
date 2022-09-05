@@ -1,6 +1,7 @@
 (ns retroact.core
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
             [clojure.tools.logging :as log]
+            [clojure.data :refer [diff]]
             [retroact.swing :refer [attr-appliers class-map]]))
 
 ; Open questions:
@@ -63,11 +64,36 @@
 (defn pad [col length]
   (vec (take length (concat col (repeat nil)))))
 
+(defn- should-build-sub-comp? [old-sub-comp new-sub-comp]
+  (or
+    (and (nil? old-sub-comp) (not (nil? new-sub-comp)))     ; sub component is new
+    (and (not (nil? old-sub-comp))
+         (not (nil? new-sub-comp))
+         (not= (:class old-sub-comp) (:class new-sub-comp))) ; sub component class changed
+    ))
+
+(defn- should-update-sub-comp? [old-sub-comp new-sub-comp]
+  ; both not nil and class same and not equal
+  (and (not= old-sub-comp new-sub-comp)
+       (not (nil? old-sub-comp)) (not (nil? new-sub-comp))
+       (= (:class old-sub-comp) (:class new-sub-comp))))
+
+(defn- should-remove-sub-comp? [old-sub-comp new-sub-comp]
+  (and (not (nil? old-sub-comp))
+       (nil? new-sub-comp)))
+
 (defn- apply-component-applier
   [attr-applier component ctx attr old-view new-view]
   (let [get-sub-comp (:get attr-applier)
         set-sub-comp (:set attr-applier)
-        ]
+        old-sub-comp (get old-view attr)
+        new-sub-comp (get new-view attr)]
+    (cond
+      (should-build-sub-comp? old-sub-comp new-sub-comp) (set-sub-comp component ctx (build-ui (:app-ref ctx) new-sub-comp))
+      (should-update-sub-comp? old-sub-comp new-sub-comp) (apply-attributes {:onscreen-component (get-sub-comp component) :app-ref (:app-ref ctx) :old-view old-sub-comp :new-view new-sub-comp})
+      (should-remove-sub-comp? old-sub-comp new-sub-comp) (set-sub-comp component ctx nil)
+      :default (do)                                         ; no-op. Happens if both are nil or they are equal
+      )
     ))
 
 (defn- apply-children-applier
@@ -88,37 +114,34 @@
 
         ; TODO: remove children that aren't in new-children
         ; TODO: check that identity (class name) match before applying attributes, otherwise, remove and add new child
-        :else (apply-attributes {:component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
+        :else (apply-attributes {:onscreen-component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
         ))))
 
 (defn apply-attributes
-  [{:keys [component app-ref old-view new-view]}]
+  [{:keys [onscreen-component app-ref old-view new-view]}]
   (log/info "applying attributes" (:class new-view))
   (if (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
       (when-let [attr-applier (get attr-appliers attr)]
         (cond
-          ; TODO: these should not be done within an atom swap! Because they are side effects. Instead, accumulate them
-          ; as a list of fns to apply after the swap is complete. In addition, the new view state should be kept with
-          ; this list of fns and the atom should be updated with the new view state when a successful update occurs
-          ; tic-tok cycle of swaps on the atom...
           ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
           ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
           ; to be moved to apply-attributes or recursive itself.
-          (children-applier? attr-applier) (apply-children-applier attr-applier component {:app-ref app-ref} attr old-view new-view)
-          (component-applier? attr-applier) (apply-component-applier attr-applier component {:app-ref app-ref} attr old-view new-view)
+          (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
+          (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component.
           :else (when (not (= (get old-view attr) (get new-view attr)))
                   (println "applying" attr-applier (get new-view attr))
                   ; TODO: check if attr is a map for a component and apply attributes to it before calling this
                   ; attr-applier, then pass the result to this attr-applier.
-                  (attr-applier component {:app-ref app-ref :new-view new-view} (get new-view attr)))))))
-  component)
+                  (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr)))))))
+  onscreen-component)
 
 (defn instantiate-class
   [ui]
   (let [id (:class ui)
+        _ (log/info "building ui for" id)
         constructor (get-in class-map [(:class ui) #_:constructor]
                             (fn default-onscreen-component-constructor []
                               (log/error "could not find constructor for" id "using default constructor")
@@ -133,8 +156,8 @@
 (defn build-ui
   "Take a view and realize it."
   [app-ref view]
-  (let [component (instantiate-class view)]
-    (apply-attributes {:component component :app-ref app-ref :new-view view})))
+  (let [onscreen-component (instantiate-class view)]
+    (apply-attributes {:onscreen-component onscreen-component :app-ref app-ref :new-view view})))
 
 
 (defn component-did-mount? [old-value new-value]
@@ -158,8 +181,13 @@
 ;TODO: rename to app-watch. There's no need for the "-2" anymore.
 (defn app-watch
   [watch-key app-ref old-value new-value]
+  (let [value-diff (diff old-value new-value)]
+    (log/info "atom value diff:" value-diff))
   (let [local-update-view-count (swap! update-view-count inc)]
     (log/info "update-view-count =" local-update-view-count)
+    (when (= 6 local-update-view-count)
+      (log/info "exiting because max view count reached")
+      (System/exit 0))
     ; Component did mount (onscreen-component created)
     (when-let [mounted-components (component-did-mount? old-value new-value)]
       (log/info "components mounted: " mounted-components)
@@ -207,9 +235,8 @@
 ; "start-main-loop" then.
 
 (defn- update-onscreen-component [{:keys [app-ref onscreen-component old-view new-view]}]
-  (let [onscreen-component (or onscreen-component (do (log/info "building ui for" (:class new-view)) (instantiate-class new-view)))]
-    ; TODO: change :component to :onscreen-component
-    (apply-attributes {:app-ref app-ref :component onscreen-component :old-view old-view :new-view new-view})
+  (let [onscreen-component (or onscreen-component (instantiate-class new-view))]
+    (apply-attributes {:app-ref app-ref :onscreen-component onscreen-component :old-view old-view :new-view new-view})
     onscreen-component))
 
 (defn- get-render-fn [comp]
@@ -217,9 +244,13 @@
                       (log/warn "component did not provide a render fn"))))
 
 (defn- update-components [app-ref app components]
+  ; app has a value for components, but components contains the component data matching the onscreen-components. So we
+  ; use it.
   (reduce-kv
     (fn render-onscreen-comp [m comp-id comp]
       (log/info "update-components comp =" comp)
+      ; TODO: change this to update-component instead of update-onscreen-component and have it update the new-view, too.
+      ; The update to the new-view will modify the result of the render fn with substitutions for objects.
       (let [render (get-render-fn comp)
             view (get-in components [comp-id :view])
             onscreen-component (get-in components [comp-id :onscreen-component])

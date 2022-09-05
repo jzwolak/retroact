@@ -6,7 +6,7 @@ plugins {
     id 'signing'
 }
 
-version = "0.1.0"
+version = "0.1.1"
 group = "com.insilicalabs"
 
 
@@ -68,7 +68,7 @@ publishing {
             }
             pom {
                 name = 'Retroact'
-                description = 'An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.'
+                description = 'Functional reactive programing for legacy applications. Supports Java Swing, uses Clojure as the main language, and considers the view as a function of state.'
                 url = 'https://github.com/jzwolak/retroact'
                 licenses {
                     license {

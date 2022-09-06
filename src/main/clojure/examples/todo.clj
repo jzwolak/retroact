@@ -61,6 +61,9 @@
                     :contents    (vec (map render-todo-item (get-in app-value [:state :todo-items])))}
 
                    {:class          :text-field
+                    ; TODO: this returns a different object each time which means the result of render is different
+                    ; even though the state may be the same. render fns and Retroact work best when render fns are pure.
+                    ; Which means, same inputs, same outputs.
                     :border         (BorderFactory/createCompoundBorder
                                       (LineBorder. Color/GRAY 1 true)
                                       (BorderFactory/createEmptyBorder 5 5 5 5))

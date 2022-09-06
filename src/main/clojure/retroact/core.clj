@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
             [clojure.tools.logging :as log]
             [clojure.data :refer [diff]]
+            [clojure.set :refer [difference]]
             [retroact.swing :refer [attr-appliers class-map]]))
 
 ; Open questions:
@@ -172,22 +173,27 @@
               (vals new-components)))))
 
 
+(defn- component-added?
+  [old-value new-value]
+  (let [old-comps (:components old-value)
+        new-comps (:components new-value)]
+    (when (not= old-comps new-comps)
+      (let [new-comp-ids (difference (set (keys new-comps)) (set (keys old-comps)))]
+        (not-empty new-comp-ids)))))
+
+
 (defn- trigger-update-view [app-ref new-value]
   (go (>! (get-in new-value [:retroact :update-view-chan]) app-ref)))
 
 ; Used for debugging, to count how many times app-watch is called.
 (def update-view-count (atom 0))
 
-;TODO: rename to app-watch. There's no need for the "-2" anymore.
 (defn app-watch
   [watch-key app-ref old-value new-value]
   (let [value-diff (diff old-value new-value)]
     (log/info "atom value diff:" value-diff))
   (let [local-update-view-count (swap! update-view-count inc)]
     (log/info "update-view-count =" local-update-view-count)
-    (when (= 6 local-update-view-count)
-      (log/info "exiting because max view count reached")
-      (System/exit 0))
     ; Component did mount (onscreen-component created)
     (when-let [mounted-components (component-did-mount? old-value new-value)]
       (log/info "components mounted: " mounted-components)
@@ -195,8 +201,8 @@
         (log/info "calling component-did-mount for" comp)
         (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
           (component-did-mount (:onscreen-component comp) app-ref new-value))))
-    ; Update view
-    (when (or (not= (:state old-value) (:state new-value)) (not= (:components old-value) (:components new-value)))
+    ; Update view when state changed or when new component added
+    (when (or (not= (:state old-value) (:state new-value)) (component-added? old-value new-value))
       (trigger-update-view app-ref new-value))))
 
 ; for debugging

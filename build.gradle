@@ -31,7 +31,6 @@ dependencies {
     api 'org.clojure:clojure:1.10.3'
     api 'com.miglayout:miglayout-swing:11.0'
     api 'org.clojure:tools.logging:1.2.4'
-    api 'manifold:manifold:0.2.4'
     api 'org.clojure:core.async:1.5.648'
 }
 

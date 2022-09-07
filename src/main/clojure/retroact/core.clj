@@ -166,7 +166,7 @@
         new-components (get new-value :components {})]
     (if (not= old-components new-components)
       (filter (fn is-component-mounted? [comp]
-                (let [comp-id (:id comp)
+                (let [comp-id (:comp-id comp)
                       old-onscreen-comp (get-in old-components [comp-id :onscreen-component])
                       onscreen-comp (get comp :onscreen-component)]
                   (and (nil? old-onscreen-comp) (not (nil? onscreen-comp)))))
@@ -199,8 +199,8 @@
       (log/info "components mounted: " mounted-components)
       (doseq [comp mounted-components]
         (log/info "calling component-did-mount for" comp)
-        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
-          (component-did-mount (:onscreen-component comp) app-ref new-value))))
+        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp comp-id app-ref new-value]))]
+          (component-did-mount (:onscreen-component comp) (:comp-id comp) app-ref new-value))))
     ; Update view when state changed or when new component added
     (when (or (not= (:state old-value) (:state new-value)) (component-added? old-value new-value))
       (trigger-update-view app-ref new-value))))
@@ -246,7 +246,7 @@
     onscreen-component))
 
 (defn- get-render-fn [comp]
-  (get comp :render (fn default-render-fn [app-ref app-value]
+  (get comp :render (fn default-render-fn [comp-id app-ref app-value]
                       (log/warn "component did not provide a render fn"))))
 
 (defn- update-components [app-ref app components]
@@ -260,7 +260,7 @@
       (let [render (get-render-fn comp)
             view (get-in components [comp-id :view])
             onscreen-component (get-in components [comp-id :onscreen-component])
-            new-view (render app-ref app)
+            new-view (render comp-id app-ref app)
             onscreen-component (update-onscreen-component
                                  {:app-ref  app-ref :onscreen-component onscreen-component
                                   :old-view view :new-view new-view})]
@@ -317,26 +317,25 @@
 (defn create-comp
   "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
    extreme cases there may be a couple hundred of these. In a typical case there will be between one component and a
-   half a dozen components. The code is optimized for a small number of top level components."
+   half a dozen components. The code is optimized for a small number of top level components. Legacy apps that wish to
+   mount components in an existing non-Retroact component can use this to construct such \"detached\" components, which
+   are essentially top level components as far as Retroact is concerned but not in the native windowing system. Note,
+   the onscreen-component is built asynchronously and may be added to the legacy component in its component-did-mount
+   or ... TODO: in the future there may be another way to do this."
   ([app-ref comp props]
-   (let [constructor (get comp :constructor (fn default-constructor [props state] state))
+   (let [constructor (get comp :constructor (fn default-constructor [comp-id props state] state))
          comp-id (keyword (gensym "comp"))
          ; Add a unique id to ensure component map is unique. Side effects by duplicate components should
          ; generate duplicate onscreen components and we need to be sure the data here is unique. Onscreen
          ; components store Java reference in comp, but it won't be here immediately.
-         comp (assoc comp :id comp-id)]
+         comp (assoc comp :comp-id comp-id)]
      ; No need to render comp view here because this will trigger the watch, which will render the view.
      (swap! app-ref
             (fn add-component-to-app [app]
               (let [state (get app :state {})
                     components (get app :components {})
-                    _ (println "props:" props)
-                    _ (println "state:" state)
-                    next-state (constructor props state)
+                    next-state (constructor comp-id props state)
                     next-components (assoc components comp-id comp)]
-                (println "next-state:" next-state)
-                (println "components:      " components)
-                (println "next-components: " next-components)
                 (assoc app :state next-state :components next-components))))))
   ([app-ref comp] (create-comp app-ref comp {})))
 

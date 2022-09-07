@@ -11,7 +11,7 @@
 (defn greeter-app
   []
   {:constructor
-   (fn constructor [props state]
+   (fn constructor [comp-id props state]
      ; return unmodified app-state. Required and a best practice because other components may depend on the state.
      state)
    ; TODO: possibly generify componentDidMount to be an event in response to state change. Code may need to execute when
@@ -19,7 +19,7 @@
    ; if certain parts of the state changed. Like `pack()` may only execute if visibility goes from false to true. Having
    ; a way to handle this concisely and generically would be amazing!
    :component-did-mount
-   (fn component-did-mount [onscreen-component app-ref app-value]
+   (fn component-did-mount [onscreen-component comp-id app-ref app-value]
      (println "greeter app did mount")
      (.pack onscreen-component)
      (.setVisible onscreen-component true))
@@ -30,14 +30,14 @@
    ; the child is actually added. Can I add transition "triggers" kind of like in SBML... when the state transitions
    ; from one to another.
    :children-changed
-   (fn children-changed [component app-ref app-value]
+   (fn children-changed [component comp-id app-ref app-value]
      (.pack component))
    ; TODO: I can create fns to make these maps more expressive. As in:
    ; (frame {:background 0xff0000 :on-close :dispose :layout (mig-layout "flowy)}
    ;        (label (or (:greeting @app-state) "Hello World!"))
    ;        (button "Say Hi!" (fn say-hi [action-event] (swap! app-state assoc :greeting "Yo"))))
    :render
-   (fn render [app-ref app-value]
+   (fn render [comp-id app-ref app-value]
      {:class      :frame
       :background (or (get-in app-value [:state :background]) 0xff0000)
       :opaque     true

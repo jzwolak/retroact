@@ -35,15 +35,15 @@
 
 (defn todo-app
   []
-  {:constructor         (fn constructor [comp-id props state]
+  {:constructor         (fn constructor [props state]
                           (assoc state :new-todo-item-text "Hi!"))
-   :component-did-mount (fn component-did-mount [onscreen-component comp-id app-ref app-value]
+   :component-did-mount (fn component-did-mount [onscreen-component app-ref app-value]
                           #_(.pack onscreen-component)
                           ; This is necessary for top level components like windows and dialogs. Unless the caller does
                           ; it for us.
                           (.setVisible onscreen-component true))
    :render
-   (fn render [comp-id app-ref app-value]
+   (fn render [app-ref app-value]
      {:class      :frame
       :on-close   :dispose
       :background 0xffffff

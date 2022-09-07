@@ -12,17 +12,18 @@
     (.setVisible frame true)
     frame))
 
-(defn create-retroact-app []
-  {:constructor         (fn [comp-id props state]
-                          (assoc state comp-id props))
-   :component-did-mount (fn [onscreen-component comp-id app-ref app-val]
-                          (let [legacy-frame (get-in app-val [:state comp-id :legacy-frame])
-                                location (get-in app-val [:state comp-id :location] BorderLayout/CENTER)]
+(defn create-retroact-app [& {:keys [location msg]
+                              :or {location BorderLayout/CENTER
+                                   msg "Hello from Retroact."}}]
+  {:constructor         (fn [props state]
+                          (merge state props))
+   :component-did-mount (fn [onscreen-component app-ref app-val]
+                          (let [legacy-frame (get-in app-val [:state :legacy-frame])]
                             (.add legacy-frame onscreen-component location)
                             (.pack legacy-frame)))
-   :render              (fn [comp-id app-ref app-val]
+   :render              (fn [app-ref app-val]
                           {:class :label
-                           :text  (get-in app-val [:state comp-id :msg] "Hello from Retroact")})})
+                           :text  msg})})
 
 (defn main []
   (let [legacy-frame (create-legacy-app)]
@@ -30,6 +31,6 @@
     ; Alternatively, when creating many components throughout the lifecycle of the app, the following pattern may be
     ; better suited.
     #_(let [app-ref (ra/init-app)]
-      (ra/create-comp app-ref (create-retroact-app) {:legacy-frame legacy-frame :location BorderLayout/CENTER :msg "hello"})
-      (ra/create-comp app-ref (create-retroact-app) {:legacy-frame legacy-frame :location BorderLayout/SOUTH :msg "from down under"}))
+      (ra/create-comp app-ref (create-retroact-app :location BorderLayout/CENTER :msg "hello") {:legacy-frame legacy-frame})
+      (ra/create-comp app-ref (create-retroact-app :location BorderLayout/SOUTH :msg "from down under") {:legacy-frame legacy-frame}))
     ))

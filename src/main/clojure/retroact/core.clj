@@ -199,8 +199,8 @@
       (log/info "components mounted: " mounted-components)
       (doseq [comp mounted-components]
         (log/info "calling component-did-mount for" comp)
-        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp comp-id app-ref new-value]))]
-          (component-did-mount (:onscreen-component comp) (:comp-id comp) app-ref new-value))))
+        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
+          (component-did-mount (:onscreen-component comp) app-ref new-value))))
     ; Update view when state changed or when new component added
     (when (or (not= (:state old-value) (:state new-value)) (component-added? old-value new-value))
       (trigger-update-view app-ref new-value))))
@@ -246,7 +246,7 @@
     onscreen-component))
 
 (defn- get-render-fn [comp]
-  (get comp :render (fn default-render-fn [comp-id app-ref app-value]
+  (get comp :render (fn default-render-fn [app-ref app-value]
                       (log/warn "component did not provide a render fn"))))
 
 (defn- update-components [app-ref app components]
@@ -260,7 +260,7 @@
       (let [render (get-render-fn comp)
             view (get-in components [comp-id :view])
             onscreen-component (get-in components [comp-id :onscreen-component])
-            new-view (render comp-id app-ref app)
+            new-view (render app-ref app)
             onscreen-component (update-onscreen-component
                                  {:app-ref  app-ref :onscreen-component onscreen-component
                                   :old-view view :new-view new-view})]
@@ -323,7 +323,7 @@
    the onscreen-component is built asynchronously and may be added to the legacy component in its component-did-mount
    or ... TODO: in the future there may be another way to do this."
   ([app-ref comp props]
-   (let [constructor (get comp :constructor (fn default-constructor [comp-id props state] state))
+   (let [constructor (get comp :constructor (fn default-constructor [props state] state))
          comp-id (keyword (gensym "comp"))
          ; Add a unique id to ensure component map is unique. Side effects by duplicate components should
          ; generate duplicate onscreen components and we need to be sure the data here is unique. Onscreen
@@ -334,7 +334,7 @@
             (fn add-component-to-app [app]
               (let [state (get app :state {})
                     components (get app :components {})
-                    next-state (constructor comp-id props state)
+                    next-state (constructor props state)
                     next-components (assoc components comp-id comp)]
                 (assoc app :state next-state :components next-components))))))
   ([app-ref comp] (create-comp app-ref comp {})))

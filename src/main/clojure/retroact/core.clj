@@ -182,28 +182,14 @@
         (not-empty new-comp-ids)))))
 
 
-(defn- trigger-update-view [app-ref new-value]
-  (go (>! (get-in new-value [:retroact :update-view-chan]) app-ref)))
-
-; Used for debugging, to count how many times app-watch is called.
-(def update-view-count (atom 0))
+(defn- trigger-update-view [app-ref]
+  (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) app-ref)))
 
 (defn app-watch
   [watch-key app-ref old-value new-value]
-  (let [value-diff (diff old-value new-value)]
-    (log/info "atom value diff:" value-diff))
-  (let [local-update-view-count (swap! update-view-count inc)]
-    (log/info "update-view-count =" local-update-view-count)
-    ; Component did mount (onscreen-component created)
-    (when-let [mounted-components (component-did-mount? old-value new-value)]
-      (log/info "components mounted: " mounted-components)
-      (doseq [comp mounted-components]
-        (log/info "calling component-did-mount for" comp)
-        (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
-          (component-did-mount (:onscreen-component comp) app-ref new-value))))
-    ; Update view when state changed or when new component added
-    (when (or (not= (:state old-value) (:state new-value)) (component-added? old-value new-value))
-      (trigger-update-view app-ref new-value))))
+  ; Update view when state changed
+  (when (not= old-value new-value)
+    (trigger-update-view app-ref)))
 
 ; for debugging
 #_(defn print-components [root]
@@ -249,6 +235,19 @@
   (get comp :render (fn default-render-fn [app-ref app-value]
                       (log/warn "component did not provide a render fn"))))
 
+(defn- update-component [app-ref app comp]
+  (let [render (get-render-fn comp)
+        view (:view comp)
+        onscreen-component (:onscreen-component comp)
+        new-view (render app-ref app)
+        updated-onscreen-component (update-onscreen-component
+                             {:app-ref  app-ref :onscreen-component onscreen-component
+                              :old-view view :new-view new-view})]
+    (when (and (nil? onscreen-component) (not (nil? updated-onscreen-component)))
+      (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
+          (component-did-mount updated-onscreen-component app-ref app)))
+    (assoc comp :view new-view :onscreen-component updated-onscreen-component)))
+
 (defn- update-components [app-ref app components]
   ; app has a value for components, but components contains the component data matching the onscreen-components. So we
   ; use it.
@@ -257,15 +256,18 @@
       (log/info "update-components comp =" comp)
       ; TODO: change this to update-component instead of update-onscreen-component and have it update the new-view, too.
       ; The update to the new-view will modify the result of the render fn with substitutions for objects.
-      (let [render (get-render-fn comp)
-            view (get-in components [comp-id :view])
-            onscreen-component (get-in components [comp-id :onscreen-component])
-            new-view (render app-ref app)
-            onscreen-component (update-onscreen-component
-                                 {:app-ref  app-ref :onscreen-component onscreen-component
-                                  :old-view view :new-view new-view})]
-        (assoc m comp-id (assoc comp :view new-view :onscreen-component onscreen-component))))
-    {} (get app :components {})))
+      ; So I did add update-component, but now I need to go into that fn and update new-view... but that isn't exactly
+      ; what I initially intended. I wanted to change the name of update-onscreen-component and have it update new-view,
+      ; too.
+      (assoc m comp-id (update-component app-ref app comp)))
+    ; This is the only reference to components in app. All other references to components is the local components to
+    ; the retroact-main-loop. It's here because there may be multiple apps running and the main loop services them all.
+    ; When the app state changes, only the components for that app are to be updated. I can make this so by storing the
+    ; relationship between apps and components in the main loop instead of inside the app state. Components may be added
+    ; or removed and they are added to app... this is why the app must be used. There is already a map from chan to
+    ; components. If added components go there then there's no need for using app here.
+    ; To do that, I can just add another command: :add-component
+    {} components))
 
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/info "STARTING RETROACT MAIN LOOP")
@@ -280,6 +282,7 @@
                            components (get chans->components update-view-chan {})
                            next-components (update-components app-ref app components)
                            next-chans->components (assoc chans->components update-view-chan next-components)]
+                       (log/info "main-loop chans->components:" chans->components)
                        (log/info "main-loop components:      " components)
                        (log/info "main-loop next-components: " next-components)
                        ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
@@ -291,17 +294,24 @@
                        ; place and this place is sequential. In addition, changes to :state will always trigger another put to
                        ; update-view-chan, which will cause this code to run again. In the worst case the code runs an extra time,
                        ; not too few times.
-                       ; TODO: update docs. In fact, running the map ouside swap! is critical. Because I want to update view and
+                       ; TODO: update docs. In fact, running the map outside swap! is critical. Because I want to update view and
                        ; the Swing components together. Once the two are updated I can call swap! and pass it the correct value of
                        ; view and swap! will just rerun until it is set. The only problem I see here is that the user will have time
                        ; to interact with the onscreen components before swap! finishes. But that really shouldn't be a problem
                        ; because the only code that would be affected by such user actions would be the code right here and since this
                        ; code is blocking until the swap! completes... there's no problem.
-                       (swap! app-ref assoc :components next-components)
                        ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
                        (recur chans next-chans->components))
         :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) chans->components))
-
+        :add-component (let [{:keys [component app-ref app]} (second val)
+                             _ (log/info "add component:" component)
+                             update-view-chan port
+                             components (get chans->components update-view-chan {})
+                             comp-id (:comp-id component)
+                             next-component (update-component app-ref app component)
+                             next-components (assoc components comp-id next-component)]
+                         (log/info "add-component next-components" next-components)
+                         (recur chans (assoc chans->components update-view-chan next-components)))
         :shutdown (do)                                      ; do nothing, will not recur
         (log/error "unrecognized command to retroact-cmd-chan:" cmd-name))
       )))
@@ -330,14 +340,30 @@
          ; components store Java reference in comp, but it won't be here immediately.
          comp (assoc comp :comp-id comp-id)]
      ; No need to render comp view here because this will trigger the watch, which will render the view.
-     (swap! app-ref
-            (fn add-component-to-app [app]
-              (let [state (get app :state {})
-                    components (get app :components {})
-                    next-state (constructor props state)
-                    next-components (assoc components comp-id comp)]
-                (assoc app :state next-state :components next-components))))))
+     (let [app
+           (swap! app-ref
+                  (fn add-component-to-app [app]
+                    (let [state (get app :state {})
+                          next-state (constructor props state)]
+                      (assoc app :state next-state))))]
+       (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) [:add-component {:app-ref app-ref :app app :component comp}])))))
   ([app-ref comp] (create-comp app-ref comp {})))
+
+(defn init-app-ref
+  "Initialize ref/atom/agent to work as state and \"app\" for Retroact components. If an application already has its
+   own ref for handling state, this fn will allow the app to use that ref with Retroact instead of the default atom
+   based empty state created by Retroact. There's no difference between using this and init-app. init-app is just a
+   shortcut to use a default atom based ref."
+  ([app-ref]
+   (let [update-view-chan (chan (sliding-buffer 1))]
+     (alter-meta! app-ref assoc :retroact {:update-view-chan update-view-chan})
+     (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
+     (swap! app-refs conj app-ref)
+     ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
+     (add-watch app-ref :retroact-watch app-watch)
+     (binding [*print-meta* true]
+       (prn app-ref))
+     app-ref)))
 
 ; 2022-08-24
 ; - Create fn to create component and mount it. Tow cases:
@@ -363,16 +389,7 @@
    multiple calls to init-app and the code will work properly when multiple calls are made, init-app is intended to be
    called once. The resources (including threads) allocated are done so as if this is for the entire application."
   ([]
-   (let [update-view-chan (chan (sliding-buffer 1))
-         app-ref (atom {:retroact   {:retroact-cmd-chan @retroact-cmd-chan
-                                     :update-view-chan  update-view-chan}
-                        :components {}
-                        :state      {}})]
-     (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
-     (swap! app-refs conj app-ref)
-     ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
-     (add-watch app-ref :retroact-watch app-watch)
-     app-ref))
+   (init-app-ref (atom {:state {}})))
   ([comp] (init-app comp {}))
   ([comp props]
    (let [app-ref (init-app)]

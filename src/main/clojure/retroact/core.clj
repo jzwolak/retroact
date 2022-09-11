@@ -3,7 +3,8 @@
             [clojure.tools.logging :as log]
             [clojure.data :refer [diff]]
             [clojure.set :refer [difference]]
-            [retroact.swing :refer [attr-appliers class-map]]))
+            [retroact.swing :refer [attr-appliers class-map]])
+  (:import (clojure.lang Atom ARef Ref Agent)))
 
 ; Open questions:
 ;
@@ -324,6 +325,15 @@
 
 (defonce retroact-cmd-chan (delay (retroact-main)))
 
+(defn- alter-app-ref! [app-ref f]
+  "Alters value of app-ref by applying f to the current value. Works on ref/atom/agent types and returns a valid value
+  of the ref at some point. For atoms and refs the value is guaranteed to be the value immediately following the alter.
+  For agents the value is non-deterministic but will be a valid value at some point in the agent's history."
+  (condp instance? app-ref
+    Atom (swap! app-ref f)
+    Ref (dosync (alter app-ref f) @app-ref)
+    Agent (do (send app-ref f) @app-ref)))
+
 (defn create-comp
   "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
    extreme cases there may be a couple hundred of these. In a typical case there will be between one component and a
@@ -341,11 +351,11 @@
          comp (assoc comp :comp-id comp-id)]
      ; No need to render comp view here because this will trigger the watch, which will render the view.
      (let [app
-           (swap! app-ref
-                  (fn add-component-to-app [app]
-                    (let [state (get app :state {})
-                          next-state (constructor props state)]
-                      (assoc app :state next-state))))]
+           (alter-app-ref! app-ref
+                           (fn add-component-to-app [app]
+                             (let [state (get app :state {})
+                                   next-state (constructor props state)]
+                               (assoc app :state next-state))))]
        (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) [:add-component {:app-ref app-ref :app app :component comp}])))))
   ([app-ref comp] (create-comp app-ref comp {})))
 

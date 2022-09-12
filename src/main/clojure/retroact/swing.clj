@@ -38,17 +38,19 @@
 (defmulti get-existing-children class)
 ; TODO: .getContentPane should probably only be called for Window (JFrame) components, not JPanel and Container
 ; components
-(defmethod get-existing-children Container [c] (.getComponents (.getContentPane c)))
+(defmethod get-existing-children Container [c] (.getComponents c))
+(defmethod get-existing-children JFrame [c] (.getComponents (.getContentPane c)))
 (defmethod get-existing-children JList [jlist]
   (let [model (.getModel jlist)]
-    (println "JList get-existing-children not implemented")
+    (log/info "JList get-existing-children not implemented")
     (-> model
         (.elements)
         (enumeration-seq)
         (vec))))
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
-(defmethod add-new-child-at Container [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
+(defmethod add-new-child-at Container [^Container c ^Component child constraints index] (.add ^Container c child constraints ^int index))
+(defmethod add-new-child-at JFrame [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
 (defmethod add-new-child-at JList [^JList jlist ^Component child constraints index]
   (let [model (.getModel jlist)]
     (println "jlist add-new-child-at" index "(model class:" (class model) " size =" (.getSize model) ")" child)
@@ -56,11 +58,13 @@
     child))
 
 (defmulti remove-child-at (fn [container index] (class container)))
-(defmethod remove-child-at Container [c index] (.remove (.getContentPane c) index))
+(defmethod remove-child-at Container [c index] (.remove c index))
+(defmethod remove-child-at JFrame [c index] (.remove (.getContentPane c) index))
 (defmethod remove-child-at JList [jlist index] (println "JList remove-child-at not implemented yet"))
 
 (defmulti get-child-at (fn [container index] (class container)))
-(defmethod get-child-at Container [c index] (.getComponent (.getContentPane c) index))
+(defmethod get-child-at Container [c index] (.getComponent c index))
+(defmethod get-child-at JFrame [c index] (.getComponent (.getContentPane c) index))
 (defmethod get-child-at JList [jlist index]
   (let [child
         (-> jlist
@@ -78,7 +82,7 @@
 ; the necessary indices, and update attributes.
 (def class-map
   {:default    (fn default-swing-component-constructor []
-                 (log/warn "using default constructor to generatoe a JPanel")
+                 (log/warn "using default constructor to generate a JPanel")
                  (JPanel.))
    :button     #(JButton.)
    :frame      #(JFrame.)
@@ -131,8 +135,8 @@
    :text               (fn set-text [c ctx text]
                          #_(.printStackTrace (Exception. "stack trace"))
                          (let [old-text (.getText c)]
-                           (println (str "new-text = \"" text "\" old-text = \"" old-text "\""))
-                           (println (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
+                           (log/info (str "new-text = \"" text "\" old-text = \"" old-text "\""))
+                           (log/info (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
                            (when (text-changed? old-text text)
                              (.setText c text))))
    :width              set-width
@@ -161,8 +165,8 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents           {:get-existing-children get-existing-children #_(fn get-existing-children [c] (.getComponents (.getContentPane c)))
-                        :add-new-child-at      add-new-child-at #_(fn add-new-child-at [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
-                        :remove-child-at       remove-child-at #_(fn remove-child-at [c index] (.remove (.getContentPane c) index))
-                        :get-child-at          get-child-at #_(fn get-child-at [c index] (.getComponent (.getContentPane c) index))}
+   :contents           {:get-existing-children get-existing-children
+                        :add-new-child-at      add-new-child-at
+                        :remove-child-at       remove-child-at
+                        :get-child-at          get-child-at}
    })

@@ -98,13 +98,20 @@
       )
     ))
 
+(defn- replace-child-at
+  [ctx remove-child-at add-new-child-at component new-child index]
+  (remove-child-at component index)
+  (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index))
+
 (defn- apply-children-applier
   [attr-applier component ctx attr old-view new-view]
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
+        remove-child-at (:remove-child-at attr-applier)
+
         old-children (get old-view attr)
         new-children (get new-view attr)
-        max-children (max (count old-children) (count new-children))]
+        max-children (count new-children)]
     (doseq [[old-child new-child index]
             (map vector
                  (pad old-children max-children)
@@ -113,11 +120,13 @@
       (log/info "child index" index "| old-child =" old-child "| new-child =" new-child)
       (cond
         (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
-
-        ; TODO: remove children that aren't in new-children
-        ; TODO: check that identity (class name) match before applying attributes, otherwise, remove and add new child
-        :else (apply-attributes {:onscreen-component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
-        ))))
+        (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
+        (and old-child new-child) (apply-attributes {:onscreen-component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
+        ))
+    (when (> (count old-children) (count new-children))
+      (doseq [index (range (dec (count old-children)) (dec (count new-children)) -1)]
+        (remove-child-at component index)))
+    ))
 
 (defn apply-attributes
   [{:keys [onscreen-component app-ref old-view new-view]}]
@@ -144,11 +153,12 @@
   [ui]
   (let [id (:class ui)
         _ (log/info "building ui for" id)
-        constructor (get-in class-map [(:class ui) #_:constructor]
+        constructor (get-in class-map [(:class ui)]
                             (fn default-onscreen-component-constructor []
-                              (log/error "could not find constructor for" id "using default constructor")
-                              (log/info "full view =" ui)
-                              (get class-map :default)))
+                              (let [default-constructor (get class-map :default)]
+                                (log/error "could not find constructor for" id "using default constructor")
+                                (log/info "full view =" ui)
+                                (default-constructor))))
         component (constructor)]
     (log/info "created" id)
     component))

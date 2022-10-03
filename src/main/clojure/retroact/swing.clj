@@ -2,11 +2,43 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.tools.logging :as log]
             [retroact.jlist :refer [create-jlist]])
-  (:import (java.awt Color Component Container Dimension)
+  (:import (java.awt Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener)
-           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JTextField)
-           (javax.swing.event DocumentListener)
+           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JTextField JComponent)
+           (javax.swing.event DocumentListener ListSelectionListener)
            (net.miginfocom.swing MigLayout)))
+
+
+(def client-prop-prefix "retroact-")
+
+(defn redraw-onscreen-component [c]
+  (.revalidate c))
+
+(defmulti set-client-prop (fn [comp name value] (class comp)))
+(defmethod set-client-prop JComponent [comp name value]
+  (.putClientProperty comp (str client-prop-prefix name) value))
+(defmethod set-client-prop Object [comp name value]
+  ; ignore. Or possibly in the future use an internal map of (map comp -> ( map name -> value) )
+  ; Which would require removing things from the map when they are removed from the view. WeakReference may help with
+  ; this.
+  )
+
+(defmulti get-client-prop (fn [comp name] (class comp)))
+(defmethod get-client-prop JComponent [comp name]
+  (let [val
+        (.getClientProperty comp (str client-prop-prefix name))]
+    val))
+(defmethod get-client-prop Object [comp name]
+  ; ignore
+  )
+
+(defn assoc-view [onscreen-component view]
+  (set-client-prop onscreen-component "view" view))
+
+(defn get-view [onscreen-component]
+  (get-client-prop onscreen-component "view"))
+
+(defn- get-view-or-identity [c] (or (get-view c) c))
 
 (def on-close-action-map
   {:dispose JFrame/DISPOSE_ON_CLOSE
@@ -18,6 +50,15 @@
   (reify ActionListener
     (actionPerformed [this action-event]
       (action-handler action-event))))
+
+(defn reify-list-selection-listener [ctx selection-change-handler]
+  (reify ListSelectionListener
+    (valueChanged [this event]
+      (let [onscreen-component (.getSource event)
+            selected-values (mapv get-view-or-identity (.getSelectedValuesList onscreen-component))]
+        (log/info "selection event =" event)
+        (when (not (.getValueIsAdjusting event))
+          (selection-change-handler (:app-ref ctx) (get-client-prop onscreen-component "view") onscreen-component selected-values))))))
 
 (defn reify-document-listener-to-text-change-listener [text-change-handler]
   (reify DocumentListener
@@ -75,22 +116,30 @@
 ; end :contents fns
 
 
+(defmulti get-child-data (fn [onscreen-component index] (class onscreen-component)))
+(defmethod get-child-data JList [onscreen-component index]
+  (let [child (get-child-at onscreen-component index)]
+    (get-client-prop child "data")))
+
+
 ; TODO: oops... I just added all the :class key-value pairs, but perhaps unnecessarily. I did that so I could match
 ; the children to the virtual dom, but I don't need to do that. The diff will be between two virtual doms. After the
 ; diff is complete I should have a list of deletions, insertions, and changes (apply attributes) at particular indices.
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:default    (fn default-swing-component-constructor []
-                 (log/warn "using default constructor to generate a JPanel")
-                 (JPanel.))
-   :button     #(JButton.)
-   :frame      #(JFrame.)
-   :label      #(JLabel.)
-   :check-box  #(JCheckBox.)
-   :text-field #(JTextField.)
-   :list       create-jlist
-   :mig-layout #(MigLayout.)}
+  {:default       (fn default-swing-component-constructor []
+                    (log/warn "using default constructor to generate a JPanel")
+                    (JPanel.))
+   :button        #(JButton.)
+   :frame         #(JFrame.)
+   :panel         #(JPanel.)
+   :label         #(JLabel.)
+   :check-box     #(JCheckBox.)
+   :text-field    #(JTextField.)
+   :list          create-jlist
+   :mig-layout    #(MigLayout.)
+   :border-layout #(BorderLayout.)}
   #_{:frame      {:constructor #(JFrame.) :class JFrame}
      :label      {:constructor #(JLabel.) :class JLabel}
      :mig-layout {:constructor #(MigLayout.) :class MigLayout}
@@ -108,30 +157,18 @@
                                                           (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
                                                           :else (.setBackground c (Color. color))))
    :border             (fn set-border [c ctx border] (.setBorder c border))
-   ; The following doesn't appear to work. It may be that macOS overrides margins.
+   ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.
    :margin             (fn set-margin [c ctx insets] (.setMargin c insets))
    :height             set-height
-   :layout             {:set
-                        (fn set-layout [c ctx layout]
-                          (pprint ctx)
-                          #_(get-in ctx [])
-                          (println "old layout:"
-                                   (try (.getLayout (.getContentPane c))
-                                        (catch NullPointerException e "none")))
-                          (println "new layout:" layout)
-                          ; TODO: build-ui should not be called here. Instead, layout should be built in the caller...
-                          ; That is, Retroact should build the layout component from the data before calling this
-                          ; attr-applier. See comments and TODO items in retroact.core "How to resolve arguments".
-                          #_(let [layout-component (build-ui (:app-ref ctx) layout)]
-                              (println "layout component:" layout-component)
-                              (println "setting layout for:" c)
-                              (.setLayout c layout-component))
-                          (.setLayout c layout)
-                          (println "layout set:" (.getLayout (.getContentPane c))))
-                        :get (fn get-layout [c ctx] (.getLayout (.getContentPane c)))}
+   :layout             {:set (fn set-layout [c ctx layout] (.setLayout c layout))
+                        :get (fn get-layout [c ctx]
+                               (cond
+                                 (instance? JFrame c) (.getLayout (.getContentPane c))
+                                 :else (.getLayout c)))}
    :opaque             (fn set-opaque [c ctx opaque] (cond
                                                        (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
                                                        :else (.setOpaque c opaque)))
+   :selection-mode     (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
    :text               (fn set-text [c ctx text]
                          #_(.printStackTrace (Exception. "stack trace"))
                          (let [old-text (.getText c)]
@@ -146,18 +183,23 @@
    :layout-constraints (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    :row-constraints    (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints (fn set-column-constraints [c ctx constraints] (.setColumnConstraints c constraints))
+   :data               (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
+
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
-   :on-action          (fn on-action [c ctx action-handler]
-                         (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
-                         (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
-                                                                        (action-handler (:app-ref ctx) action-event)))))
-   :on-text-change     (fn on-text-change [c ctx text-change-handler]
-                         #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
-                             (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
-                         (.addDocumentListener (.getDocument c)
-                                               (reify-document-listener-to-text-change-listener
-                                                 (fn text-change-handler-clojure [doc-event]
-                                                   (text-change-handler (:app-ref ctx) (.getText c))))))
+   :on-action (fn on-action [c ctx action-handler]
+                (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
+                (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
+                                                               (action-handler (:app-ref ctx) action-event)))))
+   :on-selection-change (fn on-selection-change [c ctx selection-change-handler]
+                          (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
+                          (.addListSelectionListener c (reify-list-selection-listener ctx selection-change-handler)))
+   :on-text-change (fn on-text-change [c ctx text-change-handler]
+                     #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
+                         (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
+                     (.addDocumentListener (.getDocument c)
+                                           (reify-document-listener-to-text-change-listener
+                                             (fn text-change-handler-clojure [doc-event]
+                                               (text-change-handler (:app-ref ctx) (.getText c))))))
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:
@@ -165,8 +207,8 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents           {:get-existing-children get-existing-children
-                        :add-new-child-at      add-new-child-at
-                        :remove-child-at       remove-child-at
-                        :get-child-at          get-child-at}
+   :contents {:get-existing-children get-existing-children
+              :add-new-child-at      add-new-child-at
+              :remove-child-at       remove-child-at
+              :get-child-at          get-child-at}
    })

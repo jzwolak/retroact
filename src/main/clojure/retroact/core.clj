@@ -3,7 +3,7 @@
             [clojure.tools.logging :as log]
             [clojure.data :refer [diff]]
             [clojure.set :refer [difference]]
-            [retroact.swing :refer [attr-appliers class-map]])
+            [retroact.swing :refer [attr-appliers class-map assoc-view redraw-onscreen-component]])
   (:import (clojure.lang Atom ARef Ref Agent)))
 
 ; Open questions:
@@ -41,6 +41,10 @@
 ; else about it may change).
 ;
 ; For now, I'll stick with the flat map and see how it goes.
+
+
+; TODO: destroy or remove components should remove side-effect fn from app-ref meta and remove component from main
+; retroact loop.
 
 (declare build-ui)
 
@@ -108,16 +112,17 @@
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
         remove-child-at (:remove-child-at attr-applier)
-
         old-children (get old-view attr)
         new-children (get new-view attr)
         max-children (count new-children)]
+    ; TODO: consider forcing new-children to be a vec here.
     (doseq [[old-child new-child index]
             (map vector
                  (pad old-children max-children)
                  (pad new-children max-children)
                  (range))]
-      (log/info "child index" index "| old-child =" old-child "| new-child =" new-child)
+      (log/info "child index" index "| old-child =" old-child)
+      (log/info "child index" index "| new-child =" new-child)
       (cond
         (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
         (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
@@ -126,12 +131,13 @@
     (when (> (count old-children) (count new-children))
       (doseq [index (range (dec (count old-children)) (dec (count new-children)) -1)]
         (remove-child-at component index)))
+    (redraw-onscreen-component component)
     ))
 
 (defn apply-attributes
   [{:keys [onscreen-component app-ref old-view new-view]}]
   (log/info "applying attributes" (:class new-view))
-  (if (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
+  (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
       (when-let [attr-applier (get attr-appliers attr)]
         (cond
@@ -146,7 +152,8 @@
                   (println "applying" attr-applier (get new-view attr))
                   ; TODO: check if attr is a map for a component and apply attributes to it before calling this
                   ; attr-applier, then pass the result to this attr-applier.
-                  (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr)))))))
+                  (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr))))))
+    (assoc-view onscreen-component new-view))
   onscreen-component)
 
 (defn instantiate-class
@@ -193,6 +200,10 @@
         (not-empty new-comp-ids)))))
 
 
+(defn- call-side-effects [app-ref old-value new-value]
+  (doseq [side-effect (get-in (meta app-ref) [:retroact :side-effects])]
+    (side-effect app-ref old-value new-value)))
+
 (defn- trigger-update-view [app-ref]
   (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) app-ref)))
 
@@ -200,6 +211,7 @@
   [watch-key app-ref old-value new-value]
   ; Update view when state changed
   (when (not= old-value new-value)
+    (call-side-effects app-ref old-value new-value)
     (trigger-update-view app-ref)))
 
 ; for debugging
@@ -287,6 +299,9 @@
     (let [[val port] (alts!! chans :priority true)
           cmd-name (if (vector? val) (first val) :update-view)]
       (condp = cmd-name
+        ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
+        ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
+        ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
         :update-view (let [app-ref val
                            update-view-chan port
                            app @app-ref
@@ -366,6 +381,8 @@
                              (let [state (get app :state {})
                                    next-state (constructor props state)]
                                (assoc app :state next-state))))]
+       (when-let [side-effect (:side-effect comp)]
+         (alter-meta! app-ref update-in [:retroact :side-effects] conj side-effect))
        (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) [:add-component {:app-ref app-ref :app app :component comp}])))))
   ([app-ref comp] (create-comp app-ref comp {})))
 

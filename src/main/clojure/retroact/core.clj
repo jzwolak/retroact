@@ -200,9 +200,21 @@
         (not-empty new-comp-ids)))))
 
 
+; This fn has potential to be elevated to public in a different namespace. It's usefulness is greater than this limited
+; use here in Retroact.
+(defn- call-with-catch
+  [fn & args]
+  (try
+      (apply fn args)
+      (catch Exception ex
+        (let [current-thread (Thread/currentThread)
+              uncaught-ex-handler (.getUncaughtExceptionHandler current-thread)]
+          (.uncaughtException uncaught-ex-handler current-thread ex)))))
+
+
 (defn- call-side-effects [app-ref old-value new-value]
   (doseq [side-effect (get-in (meta app-ref) [:retroact :side-effects])]
-    (side-effect app-ref old-value new-value)))
+    (call-with-catch side-effect app-ref old-value new-value)))
 
 (defn- trigger-update-view [app-ref]
   (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) app-ref)))

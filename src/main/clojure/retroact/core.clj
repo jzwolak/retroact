@@ -1,10 +1,9 @@
 (ns retroact.core
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
-            [clojure.tools.logging :as log]
-            [clojure.data :refer [diff]]
             [clojure.set :refer [difference]]
-            [retroact.swing :refer [attr-appliers class-map assoc-view redraw-onscreen-component]])
-  (:import (clojure.lang Atom ARef Ref Agent)))
+            [clojure.tools.logging :as log]
+            [retroact.swing :refer [assoc-view attr-appliers class-map redraw-onscreen-component]])
+  (:import (clojure.lang Agent Atom Ref)))
 
 ; Open questions:
 ;
@@ -36,7 +35,7 @@
 ;           this a tree.
 ;
 ; I can put all the attributes in a key called :attributes or :attrs or something.
-; Later there may also be other meta data keys for things like an id of the component in the case of lists of things.
+; Later there may also be other metadata keys for things like an id of the component in the case of lists of things.
 ; (think React's need for assigning ids to know if something was added, removed, or moved in a list since everything
 ; else about it may change).
 ;
@@ -72,10 +71,10 @@
 
 (defn- should-build-sub-comp? [old-sub-comp new-sub-comp]
   (or
-    (and (nil? old-sub-comp) (not (nil? new-sub-comp)))     ; sub component is new
+    (and (nil? old-sub-comp) (not (nil? new-sub-comp)))     ; subcomponent is new
     (and (not (nil? old-sub-comp))
          (not (nil? new-sub-comp))
-         (not= (:class old-sub-comp) (:class new-sub-comp))) ; sub component class changed
+         (not= (:class old-sub-comp) (:class new-sub-comp))) ; subcomponent class changed
     ))
 
 (defn- should-update-sub-comp? [old-sub-comp new-sub-comp]
@@ -200,7 +199,7 @@
         (not-empty new-comp-ids)))))
 
 
-; This fn has potential to be elevated to public in a different namespace. It's usefulness is greater than this limited
+; This fn has potential to be elevated to public in a different namespace. Its usefulness is greater than this limited
 ; use here in Retroact.
 (defn- call-with-catch
   [fn & args]
@@ -299,7 +298,7 @@
     ; the retroact-main-loop. It's here because there may be multiple apps running and the main loop services them all.
     ; When the app state changes, only the components for that app are to be updated. I can make this so by storing the
     ; relationship between apps and components in the main loop instead of inside the app state. Components may be added
-    ; or removed and they are added to app... this is why the app must be used. There is already a map from chan to
+    ; or removed, and they are added to app... this is why the app must be used. There is already a map from chan to
     ; components. If added components go there then there's no need for using app here.
     ; To do that, I can just add another command: :add-component
     {} components))
@@ -373,7 +372,7 @@
 
 (defn create-comp
   "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
-   extreme cases there may be a couple hundred of these. In a typical case there will be between one component and a
+   extreme cases there may be a couple of hundred of these. In a typical case there will be between one component and a
    half a dozen components. The code is optimized for a small number of top level components. Legacy apps that wish to
    mount components in an existing non-Retroact component can use this to construct such \"detached\" components, which
    are essentially top level components as far as Retroact is concerned but not in the native windowing system. Note,
@@ -424,9 +423,9 @@
 ; - watch for changes on the atom
 ;   - each component will have a separate section for its state... right? As well as global app state??
 ;   - when component is mounted, a section for its state is stored in the atom.
-; - rerun view render fns for each component who's state has changed.
+; - rerun view render fns for each component whose state has changed.
 ;   - what happens if a parent's state changes and the parent reruns a child with different props and the child's state
-;     had also changed the same time as the parent's state. What prevents the child from rerendering first then the
+;     had also changed the same time as the parent's state. What prevents the child from re-rendering first then the
 ;     parent calling the child's render fn again?
 
 ; init-app may be outdated. ... I think I can still use this concept with the above 2022-08-24 ideas.

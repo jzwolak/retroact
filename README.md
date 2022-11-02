@@ -26,8 +26,8 @@ Retroact has a couple unique contributions to the software developer community.
    define new nodes/paths in the state tree. This is in contrast to the very limited, sometimes awkward, and sometimes
    incorrect way access control is handled in programs through OOP encapsulation and procedural scoping.
 2. I would like to add JavaFX support using the modular interface for toolkit support and factor out Swing support into
-   another project (say "retroact.swing"). I have no intentions of personally implementing support for other toolkits,
-   but I hope others will and Retroact should fully support this.
+   another project (say "retroact.swing"). I have no intentions of personally implementing support for toolkits other
+   than Swing and JavaFX, but I hope others will and Retroact should fully support this.
 3. Support for custom view languages. The view language is the result of calling the render fn and currently is a
    native Retroact syntax with keywords derived from the specifics of the underlying toolkit modular interface. This
    language is verbose and not the most fluent to read, though it is readable. It's possible to have a translation layer

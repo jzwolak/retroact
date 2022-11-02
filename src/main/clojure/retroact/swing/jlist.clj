@@ -1,4 +1,4 @@
-(ns retroact.jlist
+(ns retroact.swing.jlist
   (:import (javax.swing DefaultListModel JList ListCellRenderer)))
 
 

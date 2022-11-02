@@ -34,6 +34,37 @@ dependencies {
     api 'org.clojure:core.async:1.5.648'
 }
 
+clojure {
+    builds {
+        main {
+            aotNamespaces.add("retroact.swing.compiled.jtable")
+        }
+    }
+}
+
+jar {
+    from(sourceSets.main.clojure)
+}
+
+checkClojure {
+    dependsOn compileClojure
+    classpath.from(clojure.builds.main.outputDir)
+}
+
+clojureRepl {
+    dependsOn compileClojure
+    classpath.from(clojure.builds.main.outputDir)
+}
+
+compileTestClojure {
+    classpath.from(clojure.builds.main.sourceRoots)
+}
+
+clojureRepl {
+    classpath.from(clojure.builds.main.sourceRoots)
+    classpath.from(clojure.builds.main.outputDir)
+}
+
 /*
  * The following allows dependencies of this project to propagate to parent projects and Clojurephant. This is one
  * approach. Another can be seen in the github issue link below.
@@ -53,7 +84,7 @@ java {
 
 publishing {
     publications {
-        swingBuilder(MavenPublication) {
+        retroact(MavenPublication) {
             artifactId "retroact"
             from components.java
             // ensure dependency versions get locked at time of publication

@@ -32,3 +32,4 @@
     ))
 
 (run-tests)
+(shutdown-agents)

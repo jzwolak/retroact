@@ -13,10 +13,10 @@
     (proxy [AbstractTableModel]
            (.setData))))
 
-(defn safe-table-model-set [table fn attribute]
+(defn safe-table-model-set [table f attribute]
   (when (instance? JTable table)
     (let [model (.getModel table)]
-      (fn model attribute))))
+      (f model attribute))))
 
 (defn create-jtable []
   (JTable. (RTableModel.)))

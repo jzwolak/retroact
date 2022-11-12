@@ -60,7 +60,7 @@
 
 (defn- handle-set-value-at
   "old-item is the complete item, the entire row. new-value is just the value at the particular cell that was changed."
-  [app-ref row col old-item new-value]
+  [app-ref old-item new-value row col]
   (log/info "setting value at" row "," col "to" new-value)
   (let [todo-item-id (:id old-item)
         attr (nth todo-table-attr-map col)]

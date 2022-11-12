@@ -42,25 +42,32 @@ clojure {
     }
 }
 
-jar {
-    from(sourceSets.main.clojure)
+sourceSets {
+    main {
+        output.getClassesDirs().from(sourceSets.main.clojure.srcDirs)
+    }
 }
 
 checkClojure {
     dependsOn compileClojure
+    // This is necessary even though the sourceSets classesDir was modified
     classpath.from(clojure.builds.main.outputDir)
 }
 
 clojureRepl {
     dependsOn compileClojure
+    // I'm not sure if this is necessary, but it was for checkClojure, so I leave it here until I can test.
     classpath.from(clojure.builds.main.outputDir)
 }
 
 compileTestClojure {
+    // I'm not sure if this is necessary, but it was for checkClojure, so I leave it here until I can test.
     classpath.from(clojure.builds.main.sourceRoots)
 }
 
 clojureRepl {
+    // I'm not sure if this is necessary, but it was for checkClojure, so I leave it here until I can test.
+    // Or maybe it's not necessary at all. I notice there are two extensions I made for clojureRepl.
     classpath.from(clojure.builds.main.sourceRoots)
     classpath.from(clojure.builds.main.outputDir)
 }

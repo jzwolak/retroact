@@ -389,7 +389,8 @@
      (let [app
            (alter-app-ref! app-ref
                            (fn add-component-to-app [app]
-                             (let [state (get app :state {})
+                             (constructor props app)
+                             #_(let [state (get app :state {})
                                    next-state (constructor props state)]
                                (assoc app :state next-state))))]
        (when-let [side-effect (:side-effect comp)]
@@ -437,7 +438,7 @@
    multiple calls to init-app and the code will work properly when multiple calls are made, init-app is intended to be
    called once. The resources (including threads) allocated are done so as if this is for the entire application."
   ([]
-   (init-app-ref (atom {:state {}})))
+   (init-app-ref (atom {})))
   ([comp] (init-app comp {}))
   ([comp props]
    (let [app-ref (init-app)]

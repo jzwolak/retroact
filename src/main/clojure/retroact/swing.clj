@@ -178,6 +178,18 @@
     (let [model (.getModel c)]
       (.setRowEditableFn model row-editable-fn))))
 
+(defn on-set-value-at
+  "The set-value-at-handler has args [app-ref old-item new-value row col] where row and col are the row and column of
+   the table where the user performed an edit on a the cell at row and column, old-item is the item represented at that
+   row (this is in domain space and may be a map, vec, set, or any arbitrary data structure - maps are typical), and
+   new-value is the value of the cell after the user completed the edit. The set-value-at-handler must determine where
+   in the item data structure the new-value must be set and how to perform that set in app-ref. This is, in a sense the
+   inverse of the row-fn in set-row-fn. See examples.todo for an example handler."
+  [c ctx set-value-at-handler]
+  (safe-table-model-set c (memfn setSetValueAtFn set-value-at-fn)
+                        (fn set-value-at-fn [old-item new-value row col]
+                          (set-value-at-handler (:app-ref ctx) old-item new-value row col))))
+
 (def attr-appliers
   {:background          (fn set-background [c ctx color] (cond
                                                            (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
@@ -235,8 +247,7 @@
                                                 (reify-document-listener-to-text-change-listener
                                                   (fn text-change-handler-clojure [doc-event]
                                                     (text-change-handler (:app-ref ctx) (.getText c))))))
-   :on-set-value-at (fn on-set-value-at [c ctx set-value-at-handler]
-                      (safe-table-model-set c (memfn setSetValueAtFn) set-value-at-handler))
+   :on-set-value-at     on-set-value-at
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:

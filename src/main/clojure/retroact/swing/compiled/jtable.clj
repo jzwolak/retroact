@@ -3,6 +3,9 @@
   (:import (clojure.lang IPersistentVector IFn)))
 
 
+; TODO: I could use a `:gen-class` in the `ns` form above. That may simplify this file.
+
+
 ; TODO: gen-class is causing all kinds of problems downstream unrelated to gen-class. Clojurephant for instance will not
 ; accept a single AOT compiled namespace and still include the other namespaces in the jar, the classpath for composite
 ; builds, and the classpath for other dependent tasks.
@@ -70,20 +73,28 @@
         (row-editable-fn)                                   ; get editability of columns in row
         (nth col false))))                                  ; get editability of column, default to false
 
-(defn rtable-model-getValueAt [this row col]
-  (log/info "get value at" row "," col)
-  (let [state @(.state this)
-        row-fn (:row-fn state)
-        data (:data state)]
-    (-> data
-        (nth row)
+(defn- get-item-at [state row]
+  (let [data (:data state)]
+    (nth data row)))
+
+(defn- get-value-at [state row col]
+  (let [row-fn (:row-fn state)
+        item (get-item-at state row)]
+    (-> item
         (row-fn)
         (nth col))))
 
-(defn rtable-model-setValueAt [this row col value]
+(defn rtable-model-getValueAt [this row col]
+  (log/info "get value at" row "," col)
+  (get-value-at @(.state this) row col))
+
+(defn rtable-model-setValueAt [this value row col]
   ; TODO: implement and call setValueAtFn if present
   ; perhaps if setValueAtFn is present and isCellEditableFn is not, then all cells should be editable.
-  )
+  (let [state @(.state this)
+        set-value-at-fn (get state :set-value-at-fn (fn [old-item new-value row col]))
+        old-item (get-item-at state row)]
+    (set-value-at-fn old-item value row col)))
 
 (defn rtable-model-setData [this data]
   (let [state-atom (.state this)]
@@ -101,6 +112,6 @@
   (let [state-atom (.state this)]
     (swap! state-atom assoc :row-editable-fn row-editable-fn)))
 
-(defn rtable-model-setSetValueAtFn [this row-editable-fn]
+(defn rtable-model-setSetValueAtFn [this set-value-at-fn]
   (let [state-atom (.state this)]
-    (swap! state-atom assoc :row-editable-fn row-editable-fn)))
+    (swap! state-atom assoc :set-value-at-fn set-value-at-fn)))

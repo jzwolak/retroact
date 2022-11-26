@@ -212,7 +212,7 @@
 
 
 (defn- call-side-effects [app-ref old-value new-value]
-  (doseq [side-effect (get-in (meta app-ref) [:retroact :side-effects])]
+  (doseq [[_ side-effect] (get-in (meta app-ref) [:retroact :side-effects])]
     (call-with-catch side-effect app-ref old-value new-value)))
 
 (defn- trigger-update-view [app-ref]
@@ -370,6 +370,27 @@
     Ref (dosync (alter app-ref f) @app-ref)
     Agent (do (send app-ref f) @app-ref)))
 
+(defn- check-side-effect-structure
+  [side-effect]
+  (cond
+    ; The perfect example of a side effect
+    (and (map? side-effect))
+    side-effect
+    ; A lone fn implementing a side effect, generate a UUID for the fn.
+    (fn? side-effect)
+    (do
+      (log/warn "side effect without a key, consider using the {:key-id (fn side-effect [app-ref old-val new-val] ...)} form")
+      {(keyword (gensym "retroact-side-effect-")) side-effect})
+    :default
+    (do
+      (log/error "side effect is not a map or a fn. Please check the code and be sure the side effect appears correctly")
+      {})))
+
+(defn- register-side-effect
+  [app-val side-effect]
+  (let [side-effects-to-add (filter (comp fn? last) side-effect)]
+    (update-in app-val [:retroact :side-effects] merge side-effects-to-add)))
+
 (defn create-comp
   "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
    extreme cases there may be a couple of hundred of these. In a typical case there will be between one component and a
@@ -389,12 +410,10 @@
      (let [app
            (alter-app-ref! app-ref
                            (fn add-component-to-app [app]
-                             (constructor props app)
-                             #_(let [state (get app :state {})
-                                   next-state (constructor props state)]
-                               (assoc app :state next-state))))]
+                             (constructor props app)))]
        (when-let [side-effect (:side-effect comp)]
-         (alter-meta! app-ref update-in [:retroact :side-effects] conj side-effect))
+         (log/info "registering side effect for" comp)
+         (alter-meta! app-ref register-side-effect (check-side-effect-structure side-effect)))
        (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) [:add-component {:app-ref app-ref :app app :component comp}])))))
   ([app-ref comp] (create-comp app-ref comp {})))
 

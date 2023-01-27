@@ -148,7 +148,6 @@
           (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component.
           :else (when (not (= (get old-view attr) (get new-view attr)))
-                  (println "applying" attr-applier (get new-view attr))
                   ; TODO: check if attr is a map for a component and apply attributes to it before calling this
                   ; attr-applier, then pass the result to this attr-applier.
                   (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr))))))
@@ -215,8 +214,12 @@
   (doseq [[_ side-effect] (get-in (meta app-ref) [:retroact :side-effects])]
     (call-with-catch side-effect app-ref old-value new-value)))
 
+(defn- run-cmd
+  [app-ref cmd]
+  (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) cmd)))
+
 (defn- trigger-update-view [app-ref]
-  (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) app-ref)))
+  (run-cmd app-ref [:update-view app-ref]))
 
 (defn app-watch
   [watch-key app-ref old-value new-value]
@@ -269,14 +272,21 @@
   (get comp :render (fn default-render-fn [app-ref app-value]
                       (log/warn "component did not provide a render fn"))))
 
-(defn- update-component [app-ref app comp]
+(defn- update-component
+  "Update onscreen-component, create it if necessary, and return the new view and updated onscreen-component."
+  [app-ref app comp]
   (let [render (get-render-fn comp)
         view (:view comp)
         onscreen-component (:onscreen-component comp)
+        update-onscreen-component (or (:update-onscreen-component comp) update-onscreen-component)
         new-view (render app-ref app)
-        updated-onscreen-component (update-onscreen-component
-                             {:app-ref  app-ref :onscreen-component onscreen-component
-                              :old-view view :new-view new-view})]
+        _ (log/info "updater:" update-onscreen-component "default updater:" retroact.core/update-onscreen-component)
+        updated-onscreen-component
+        (if (or (not onscreen-component) (not= view new-view))
+          (update-onscreen-component
+            {:app-ref  app-ref :onscreen-component onscreen-component
+             :old-view view :new-view new-view})
+          onscreen-component)]
     (when (and (nil? onscreen-component) (not (nil? updated-onscreen-component)))
       (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
           (component-did-mount updated-onscreen-component app-ref app)))
@@ -304,24 +314,21 @@
     {} components))
 
 (defn- retroact-main-loop [retroact-cmd-chan]
-  (log/info "STARTING RETROACT MAIN LOOP")
+  (log/trace "STARTING RETROACT MAIN LOOP")
   (loop [chans [retroact-cmd-chan]
-         chans->components {}]
+         app-ref->components {}]
+    ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here.
     (let [[val port] (alts!! chans :priority true)
-          cmd-name (if (vector? val) (first val) :update-view)]
+          cmd-name (first val)]
       (condp = cmd-name
         ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
         ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
         ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
-        :update-view (let [app-ref val
-                           update-view-chan port
+        :update-view (let [app-ref (second val)
                            app @app-ref
-                           components (get chans->components update-view-chan {})
+                           components (get app-ref->components app-ref {})
                            next-components (update-components app-ref app components)
-                           next-chans->components (assoc chans->components update-view-chan next-components)]
-                       (log/info "main-loop chans->components:" chans->components)
-                       (log/info "main-loop components:      " components)
-                       (log/info "main-loop next-components: " next-components)
+                           next-app-ref->components (assoc app-ref->components app-ref next-components)]
                        ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
                        ;   to be sure priority is set - I remember seeing that somewhere.
                        ; - loop through all components in current app-ref.
@@ -338,19 +345,21 @@
                        ; because the only code that would be affected by such user actions would be the code right here and since this
                        ; code is blocking until the swap! completes... there's no problem.
                        ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
-                       (recur chans next-chans->components))
-        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) chans->components))
+                       (recur chans next-app-ref->components))
+        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) app-ref->components))
         :add-component (let [{:keys [component app-ref app]} (second val)
-                             _ (log/info "add component:" component)
-                             update-view-chan port
-                             components (get chans->components update-view-chan {})
+                             components (get app-ref->components app-ref {})
                              comp-id (:comp-id component)
                              next-component (update-component app-ref app component)
                              next-components (assoc components comp-id next-component)]
-                         (log/info "add-component next-components" next-components)
-                         (recur chans (assoc chans->components update-view-chan next-components)))
+                         (recur chans (assoc app-ref->components app-ref next-components)))
+        :remove-component (let [{:keys [comp-id app-ref]} (second val)
+                                next-components (dissoc (get app-ref->components app-ref) comp-id)
+                                next-app-ref->components (assoc app-ref->components app-ref next-components)]
+                            (recur chans next-app-ref->components))
         :shutdown (do)                                      ; do nothing, will not recur
-        (log/error "unrecognized command to retroact-cmd-chan:" cmd-name))
+        (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)
+            (recur chans app-ref->components)))
       )))
 
 (defn- retroact-main []
@@ -391,6 +400,11 @@
   (let [side-effects-to-add (filter (comp fn? last) side-effect)]
     (update-in app-val [:retroact :side-effects] merge side-effects-to-add)))
 
+(defn destroy-comp
+  "Destroy a component. You'll need to keep comp-id created with create-comp in order to call this."
+  [app-ref comp-id]
+  (run-cmd app-ref [:remove-component {:app-ref app-ref :comp-id comp-id}]))
+
 (defn create-comp
   "Create a new top level component. There should not be many of these. This is akin to a main window. In the most
    extreme cases there may be a couple of hundred of these. In a typical case there will be between one component and a
@@ -414,7 +428,8 @@
        (when-let [side-effect (:side-effect comp)]
          (log/info "registering side effect for" comp)
          (alter-meta! app-ref register-side-effect (check-side-effect-structure side-effect)))
-       (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) [:add-component {:app-ref app-ref :app app :component comp}])))))
+       (run-cmd app-ref [:add-component {:app-ref app-ref :app app :component comp}])
+       comp-id)))
   ([app-ref comp] (create-comp app-ref comp {})))
 
 (defn init-app-ref
@@ -429,7 +444,7 @@
      (swap! app-refs conj app-ref)
      ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
      (add-watch app-ref :retroact-watch app-watch)
-     (binding [*print-meta* true]
+     #_(binding [*print-meta* true]
        (prn app-ref))
      app-ref)))
 
@@ -462,5 +477,4 @@
   ([comp props]
    (let [app-ref (init-app)]
      (create-comp app-ref comp props)
-     app-ref))
-  )
+     app-ref)))

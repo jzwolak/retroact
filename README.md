@@ -16,7 +16,7 @@ Retroact has a couple unique contributions to the software developer community.
 1. Retroact is not tied to Swing and was designed from the start to have a modular connection to the underlying toolkit.
    Therefore, it is easy to add support for other toolkits such as JavaFX, SWT, AWT, etc..
 2. Retroact plays nice with existing legacy application code. The whole point of this project was to allow me to move
-   my working forward into modern programming practices without requiring my clients to pay for a complete rewrite of
+   my work forward into modern programming practices without requiring my clients to pay for a complete rewrite of
    their existing applications. Hence it is named "Retro"-act.
 
 ## The Future
@@ -85,3 +85,18 @@ Run the REPL then execute the following.
     > (require '[retroact.core :refer :all] :reload-all)
     > (require '[examples.greeter :refer :all] :reload-all)
     > (init-app (greeter-app))
+
+
+# Usage
+
+`init-app` only needs to be called once and may be called with a component. More components may be added later with
+`create-comp`. Generally, components created with `create-comp` are somewhere close to the root if not the root and last
+for the duration of the app. However, in some exceptional cases - like when transitioning a legacy code base - there
+may be components that need to be created and destroyed. Components may be destroyed with `destroy-comp`.
+
+* `init-app` - initialize Retroact and the current app. Maybe called multiple times if there are multiple apps in the
+               current JVM.
+* `create-comp` - create a component; generally the root component or component that lasts for the duration of the app.
+                  Create as many components as you like, but there probably only needs to be one for a pure Retroact
+                  app - the root. All other components are created dynamically by Retroact.
+* `destroy-comp` - destroy a component; only used in rare cases like with legacy code.

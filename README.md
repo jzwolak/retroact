@@ -39,7 +39,7 @@ Retroact has a couple unique contributions to the software developer community.
 # Dependency
 
 ```gradle
-dependencise {
+dependencies {
     implementation 'com.insilicalabs:retroact:0.2.4'
 }
 ```

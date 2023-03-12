@@ -5,7 +5,7 @@
 An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.
 
 The goal is to make something that can be used in Java and with legacy applications and have it be completely
-Functional Reactive Programming.
+Functional Reactive Programming (FRP).
 
 This is a pure Clojure implementation and no Java bindings. There may be a future version with a Java API.
 
@@ -34,6 +34,15 @@ Retroact has a couple unique contributions to the software developer community.
    for arbitrary view languages to Retroact's native language in Retroact's main loop. In doing so, the components and
    render fns may work with the higher level view language, and possibly pluggable view languages of the user's
    choosing.
+
+
+# Dependency
+
+```gradle
+dependencise {
+    implementation 'com.insilicalabs:retroact:0.2.4'
+}
+```
 
 # Quick Start
 
@@ -100,3 +109,62 @@ may be components that need to be created and destroyed. Components may be destr
                   Create as many components as you like, but there probably only needs to be one for a pure Retroact
                   app - the root. All other components are created dynamically by Retroact.
 * `destroy-comp` - destroy a component; only used in rare cases like with legacy code.
+
+
+## Legacy Apps
+
+The whole point of Retroact is enable the transition of legacy code to a functional reactive programming model. Here are
+some of the deeper ways in which Retroact supports this.
+
+An existing complex component may have part of its state transitioned to Clojure state and updated using FRP. For this
+example let's assume the component is created during application startup and is destroyed when the application is
+shutdown (though Retroact supports a component life cycle different from the application runtime). For simplicity, let's
+say the component is a subclass of `JFrame` and somewhere there is a line of Java code that looks like
+
+    JFrame myComponent = createMyComponent();
+
+Now this Java object may be saved in your definition of a Retroact component as follows (assuming you know how to get
+a reference to this Java object in Clojure):
+
+```clojure
+(defn my-legacy-component [my-component]
+    {:onscreen-component my-component
+     :update-onscreen-component update-my-component
+     :render
+      (fn render-my-component [app-ref app-val]
+          {:title (get-in app-val [:state :title])
+           :color (get-in app-val [:state :color]})
+    })
+
+(my-legacy-component myComponent)
+```
+
+There are three important differences between this "legacy" component and a standard Retroact component.
+
+1. The `:onscreen-component` is defined. Normally, Retroact manages the life cycle of the onscreen component. In this
+   case we've supplied it and Retroact will use it and _not_ manage the life cycle of the onscreen component.
+2. An updater fn is supplied in `:update-onscreen-component`. Retroact has a default updater fn, but when one is
+   supplied Retroact will use the supplied fn instead. The supplied fn will be called _only_ when the result of the
+   render fn has changed and the update fn must apply those updates to the onscreen component.
+3. The render fn returns an arbitrary map that is only semantically meaningful to `update-my-component`. This map is not
+   used in other parts of Retroact - unlike the maps for Swing components - except to compare equality to determine if
+   the udpate fn should be called.
+
+And so, here is the update fn.
+
+```clojure
+(defn update-my-component [{:keys [onscreen-component old-view new-view]}]
+    (.setTitle onscreen-component (:title new-view))
+    (.setBackground onscreen-component (:color new-view)))
+```
+
+In this case both attributes are set, but for efficiency and larger components it would be better to compare those
+attributes in old-view and new-view to see which have actually changed. Also, it is a good practice to not change these
+attributes anywhere else - as in, do not modify the title or background in the legacy code - and let Retroact manage
+them. If the legacy code needs to update the title or background color then have it set the appropriate value in the
+Clojure version of the application state and Retroact will automatically update the component!
+
+You may be wondering about the mutability of `myComponent` and the earlier statement about only putting immutable data
+in Retroact components. This is precisely the exception, but it's also important to note that Retroact is only seeing
+the reference value and not the object value. Since the component is not changing, the reference value is not changing
+and, as far as Retroact is concerned, the Retroact component is a _value_, though not in the strictest of senses.

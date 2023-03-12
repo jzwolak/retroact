@@ -120,8 +120,8 @@
                  (pad old-children max-children)
                  (pad new-children max-children)
                  (range))]
-      (log/info "child index" index "| old-child =" old-child)
-      (log/info "child index" index "| new-child =" new-child)
+      (log/info "child index" index "| old-child =" old-child "log msg1")
+      (log/info "child index" index "| new-child =" new-child "log msg2")
       (cond
         (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
         (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
@@ -135,7 +135,7 @@
 
 (defn apply-attributes
   [{:keys [onscreen-component app-ref old-view new-view]}]
-  (log/info "applying attributes" (:class new-view))
+  (log/info "applying attributes" (:class new-view) "log msg3")
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (doseq [attr (set (keys new-view))]
       (when-let [attr-applier (get attr-appliers attr)]
@@ -157,12 +157,12 @@
 (defn instantiate-class
   [ui]
   (let [id (:class ui)
-        _ (log/info "building ui for" id)
+        _ (log/info "building ui for" id "log msg4")
         constructor (get-in class-map [(:class ui)]
                             (fn default-onscreen-component-constructor []
                               (let [default-constructor (get class-map :default)]
                                 (log/error "could not find constructor for" id "using default constructor")
-                                (log/info "full view =" ui)
+                                (log/info "full view =" ui "log msg5")
                                 (default-constructor))))
         component (constructor)]
     (log/info "created" id)
@@ -297,7 +297,7 @@
   ; use it.
   (reduce-kv
     (fn render-onscreen-comp [m comp-id comp]
-      (log/info "update-components comp =" comp)
+      #_(log/info "update-components comp =" comp "log msg6") ; This can be a lot of data.
       ; TODO: change this to update-component instead of update-onscreen-component and have it update the new-view, too.
       ; The update to the new-view will modify the result of the render fn with substitutions for objects.
       ; So I did add update-component, but now I need to go into that fn and update new-view... but that isn't exactly
@@ -426,7 +426,7 @@
                            (fn add-component-to-app [app]
                              (constructor props app)))]
        (when-let [side-effect (:side-effect comp)]
-         (log/info "registering side effect for" comp)
+         (log/info "registering side effect for" comp "log msg7")
          (alter-meta! app-ref register-side-effect (check-side-effect-structure side-effect)))
        (run-cmd app-ref [:add-component {:app-ref app-ref :app app :component comp}])
        comp-id)))

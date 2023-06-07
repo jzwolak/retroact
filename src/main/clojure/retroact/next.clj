@@ -1,30 +1,15 @@
-(ns retroact.core
+(ns retroact.next
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference]]
             [clojure.tools.logging :as log]
-            [retroact.swing :refer [assoc-view attr-appliers class-map redraw-onscreen-component]])
-  (:import (clojure.lang Agent Atom Ref)))
+            [retroact.swing :refer [assoc-view redraw-onscreen-component]])
+  (:import (clojure.lang Agent Atom Ref)
+           (java.beans Introspector)))
 
-; Open questions:
-;
-;  - How to resolve arguments to appliers that need to be objects... like layout managers. And colors for that matter.
-;    Currently, I resolve colors by requiring them to be hex values and instantiate the color class with a hex value.
-;    But there are many ways to get colors and this is limiting for people used to the full Java library. A resolver
-;    for the Color class and the ability to do resolution on arbitrary values (not just components in contents and the
-;    argument of build-ui) would be nice.
-;    The render fn can generate a Color object in place and that will be passed to the attr-applier. The issue here is
-;    that the Color object may not be comparable to a previously instantiated Color object even if they have the same
-;    value.
-;    Also, since arbitrary components may be present as attributes, the value of the attr may be processed as a
-;    component before calling the attr-applier
-;    There needs to be a getter and setter for such attrs similar to how children appliers can get, add, and delete
-;    child components. Because we need to be able to get the existing onscreen-component in order to apply-attrs to it.
-;  - :contents is not actually special. It can be treated as an attribute that takes an array of objects.
-;    - attributes can take a primitive value or an object.
-;    - in this way, everything becomes orthogonal (normalized).
-;  - :class is still different though. It's part of the type or identity. Something that is persistent.
-;
-;
+; An app has app state stored in some kind of ref type: atom, agent, or ref. Metadata is associated with this for
+; Retroact to track the relation between the app state and onscreen resources. Retroact also has its own internal
+; state to manage onscreen resources and efficiently update them.
+
 
 ; The keys fall into categories. I can separate them and group them into sub keys or just flatten them and sort them
 ; out while iterating over the map.
@@ -46,9 +31,17 @@
 ; retroact loop.
 
 (declare build-ui)
+(declare retroact-main)
 
+; I believe this is just used for debugging and convenience.
+; Deprecated, use state
 (defonce app-refs (atom []))
 
+(defonce state (atom {:apps {}}))
+
+(defonce retroact-cmd-chan (delay (retroact-main)))
+
+(defn get-app-id [app-ref] (:retroact-app-id (meta app-ref)))
 
 (defn component-applier? [attr-applier]
   (and (map? attr-applier)
@@ -102,19 +95,51 @@
     ))
 
 (defn- replace-child-at
-  [ctx remove-child-at add-new-child-at component new-child index]
+  [app-ref remove-child-at add-new-child-at component new-child index]
   (remove-child-at component index)
-  (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index))
+  (add-new-child-at component (build-ui app-ref new-child) new-child index))
 
-(defn- apply-children-applier
-  [attr-applier component ctx attr old-view new-view]
-  (let [add-new-child-at (:add-new-child-at attr-applier)
-        get-child-at (:get-child-at attr-applier)
-        remove-child-at (:remove-child-at attr-applier)
-        old-children (get old-view attr)
-        new-children (get new-view attr)
+
+
+(defn get-bean-property-descriptor [object prop-name]
+  (log/info "getting bean property for " prop-name)
+  (let [prop-name (if (keyword? prop-name) (subs (str prop-name) 1) prop-name)
+        klass (.getClass object)
+        pds (-> (Introspector/getBeanInfo klass)
+               (.getPropertyDescriptors))]
+    (first (filter #(= prop-name (.getName %)) pds))))
+
+(declare instantiate-class)
+
+(defn- get-or-instantiate [onscreen-component prop-name old-view new-view]
+  (let [old-constructor-args (:constructor-args old-view)
+        new-constructor-args (:constructor-args new-view)
+        pd (get-bean-property-descriptor onscreen-component prop-name)
+        getter (.getReadMethod pd)
+        prop-val (.invoke getter onscreen-component (into-array Object []))]
+    (if (and (= old-constructor-args new-constructor-args)
+             (.isInstance (:class new-view) prop-val))
+      prop-val
+      (let [new-instance (instantiate-class new-view)
+            setter (.getWriteMethod pd)]
+        (.invoke setter onscreen-component (into-array Object [new-instance]))
+        new-instance))))
+
+(defn update-children
+  [onscreen-component app-ref name old-children new-children]
+  ; TODO: if bean has an indexed property, consider using the indexed property to modify children instead of looking
+  ; for multimethod in toolkit bindings.
+  (let [app-id (get-app-id app-ref)
+        toolkit-bindings (get-in @state [:apps app-id :toolkit-bindings])
+        pd (get-bean-property-descriptor onscreen-component name)
+        klass (.getComponentType (.getPropertyType pd))
+        add-child-at (get-in toolkit-bindings [:defaults :add-child-at]
+                          (fn add-child-using-reflection [container child index]
+                            (let [method (.getMethod (.getClass onscreen-component) "add" (into-array Class [klass Integer/TYPE]))]
+                              (.invoke method container (into-array Object [child index])))))
+        get-child-at (get-in toolkit-bindings [:defaults :get-child-at])
+        remove-child-at (get-in toolkit-bindings [:defaults :remove-child-at])
         max-children (count new-children)]
-    ; TODO: consider forcing new-children to be a vec here.
     (doseq [[old-child new-child index]
             (map vector
                  (pad old-children max-children)
@@ -123,48 +148,79 @@
       (log/info "child index" index "| old-child =" old-child "log msg1")
       (log/info "child index" index "| new-child =" new-child "log msg2")
       (cond
-        (nil? old-child) (add-new-child-at component (build-ui (:app-ref ctx) new-child) (:constraints new-child) index)
-        (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
-        (and old-child new-child) (apply-attributes {:onscreen-component (get-child-at component index) :app-ref (:app-ref ctx) :old-view old-child :new-view new-child})
+        (nil? old-child) (add-child-at onscreen-component (build-ui app-ref new-child) new-child index)
+        (not= (:class old-child) (:class new-child)) (replace-child-at app-ref remove-child-at add-child-at onscreen-component new-child index)
+        (and old-child new-child) (apply-attributes {:onscreen-component (get-child-at onscreen-component index) :app-ref app-ref :old-view old-child :new-view new-child})
         ))
     (when (> (count old-children) (count new-children))
       (doseq [index (range (dec (count old-children)) (dec (count new-children)) -1)]
-        (remove-child-at component index)))
-    (redraw-onscreen-component component)
-    ))
+        (remove-child-at onscreen-component index)))
+    (redraw-onscreen-component onscreen-component)
+    #_(log/info "got pd =" pd)
+    #_(log/info "add-method for" name "=" add-child)
+    #_(doseq [child-view new-val]
+      (let [onscreen-child-component (instantiate-class child-view)]
+        (apply-attributes {:onscreen-component onscreen-child-component
+                           :app-ref            app-ref
+                           :old-view           nil
+                           :new-view           child-view})
+        (add-child onscreen-component onscreen-child-component)))))
+
+(defn- update-properties
+  [onscreen-component app-ref old-view new-view]
+  (let [old-props (:properties old-view)
+        new-props (:properties new-view)]
+    (when (not= old-props new-props)
+      ; TODO: do something about props removed from old to new
+      (doseq [name (set (keys new-props))]
+        (let [new-val (get new-props name)
+              old-val (get old-props name)]
+          (log/info name "=" new-val)
+          (cond
+            (vector? new-val) (update-children onscreen-component app-ref name old-val new-val)
+            (map? new-val) (apply-attributes {:onscreen-component (get-or-instantiate onscreen-component name old-val new-val)
+                                              :app-ref            app-ref
+                                              :old-view           old-val
+                                              :new-view           new-val})
+            :else (when (not (= old-val new-val))
+                    (log/info "applying attribute" name " = " (get new-props name))
+                    (if-let [pd (get-bean-property-descriptor onscreen-component name)]
+                      (if-let [setter (.getWriteMethod pd)]
+                        (.invoke setter onscreen-component (into-array Object [new-val]))
+                        (log/error "setter is nil, skipping property" name))
+                      (log/error "could not find property descriptor for" name "on"
+                                 (.getName (.getClass onscreen-component)) "skipping update/set for property")))))))))
+
+(defn- update-listeners
+  [onscreen-component app-ref old-view new-view]
+  (let [old-listeners (:listeners old-view)
+        new-listeners (:listeners new-view)]
+    (when (not= old-listeners new-listeners)
+      )))
 
 (defn apply-attributes
   [{:keys [onscreen-component app-ref old-view new-view]}]
   (log/info "applying attributes" (:class new-view) "log msg3")
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
-    (doseq [attr (set (keys new-view))]
-      (when-let [attr-applier (get attr-appliers attr)]
-        (cond
-          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
-          ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
-          ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
-          ; to be moved to apply-attributes or recursive itself.
-          (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
-          (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
-          ; Assume attr-applier is a fn and call it on the component.
-          :else (when (not (= (get old-view attr) (get new-view attr)))
-                  ; TODO: check if attr is a map for a component and apply attributes to it before calling this
-                  ; attr-applier, then pass the result to this attr-applier.
-                  (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr))))))
+    (update-properties onscreen-component app-ref old-view new-view)
+    (update-listeners onscreen-component app-ref old-view new-view)
     (assoc-view onscreen-component new-view))
   onscreen-component)
 
 (defn instantiate-class
-  [ui]
-  (let [id (:class ui)
-        _ (log/info "building ui for" id "log msg4")
-        class-or-fn (get-in class-map [(:class ui)] (get class-map :default))
-        component
-        (cond
-          (instance? Class class-or-fn)
-            (.newInstance (.getConstructor class-or-fn (into-array Class [])) (into-array Object []))
-          (fn? class-or-fn) (class-or-fn ui)
-          :else (log/error "no class or fn found to create component!"))]
+  [view]
+  (let [klass (:class view)
+        constructor-args-raw (get view :constructor-args [])
+        _ (log/info "building view for" klass "using no-arg construct. log msg4")
+        _ (log/info "maybe not no-arg constructor")
+        _ (log/info "raw args:" constructor-args-raw)
+        constructor-args (mapv (fn [ca] (if (vector? ca) (second ca) ca)) constructor-args-raw)
+        constructor-arg-types (mapv (fn [ca] (if (vector? ca) (first ca) (type ca))) constructor-args-raw)
+        _ (log/info "args:" constructor-args)
+        _ (log/info "types:" constructor-arg-types)
+        component (.newInstance (.getConstructor klass (into-array Class constructor-arg-types))
+                                (into-array Object constructor-args))]
+    (log/info "created" klass)
     component))
 
 ; TODO: perhaps build-ui is more like build-object because :mig-layout is not a UI. And the way things are setup,
@@ -202,11 +258,11 @@
 (defn- call-with-catch
   [fn & args]
   (try
-      (apply fn args)
-      (catch Exception ex
-        (let [current-thread (Thread/currentThread)
-              uncaught-ex-handler (.getUncaughtExceptionHandler current-thread)]
-          (.uncaughtException uncaught-ex-handler current-thread ex)))))
+    (apply fn args)
+    (catch Exception ex
+      (let [current-thread (Thread/currentThread)
+            uncaught-ex-handler (.getUncaughtExceptionHandler current-thread)]
+        (.uncaughtException uncaught-ex-handler current-thread ex)))))
 
 
 (defn- call-side-effects [app-ref old-value new-value]
@@ -215,7 +271,9 @@
 
 (defn- run-cmd
   [app-ref cmd]
-  (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) cmd)))
+  (let [app-id (get-app-id app-ref)]
+    (log/info "got app-id for run-cmd" app-id)
+    (go (>! (get-in @state [:apps app-id :update-view-chan]) cmd))))
 
 (defn- trigger-update-view [app-ref]
   (run-cmd app-ref [:update-view app-ref]))
@@ -229,27 +287,27 @@
 
 ; for debugging
 #_(defn print-components [root]
-  (when (instance? Container root)
-    (doseq [child (.getComponents root)]
-      (println child)
-      (print-components child))))
+    (when (instance? Container root)
+      (doseq [child (.getComponents root)]
+        (println child)
+        (print-components child))))
 
 ; for debugging
 #_(defn find-component
-  ([children root predicate-fn]
-   (println "  iterating over children" children)
-   (let [matching-child (find-component (first children) predicate-fn)]
+    ([children root predicate-fn]
+     (println "  iterating over children" children)
+     (let [matching-child (find-component (first children) predicate-fn)]
+       (cond
+         matching-child matching-child
+         (< 1 (count children)) (find-component (rest children) root predicate-fn)
+         :else nil)))
+    ([root predicate-fn]
+     (println "testing" root)
      (cond
-       matching-child matching-child
-       (< 1 (count children)) (find-component (rest children) root predicate-fn)
+       (nil? root) nil
+       (predicate-fn root) root
+       (instance? Container root) (find-component (.getComponents root) root predicate-fn)
        :else nil)))
-  ([root predicate-fn]
-   (println "testing" root)
-   (cond
-     (nil? root) nil
-     (predicate-fn root) root
-     (instance? Container root) (find-component (.getComponents root) root predicate-fn)
-     :else nil)))
 
 
 ; TODO: FORGET IT ALL! Rather, the idea about threads and channels for the main loop.
@@ -279,7 +337,6 @@
         onscreen-component (:onscreen-component comp)
         update-onscreen-component (or (:update-onscreen-component comp) update-onscreen-component)
         new-view (render app-ref app)
-        _ (log/info "updater:" update-onscreen-component "default updater:" retroact.core/update-onscreen-component)
         updated-onscreen-component
         (if (or (not onscreen-component) (not= view new-view))
           (update-onscreen-component
@@ -288,7 +345,7 @@
           onscreen-component)]
     (when (and (nil? onscreen-component) (not (nil? updated-onscreen-component)))
       (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
-          (component-did-mount updated-onscreen-component app-ref app)))
+        (component-did-mount updated-onscreen-component app-ref app)))
     (assoc comp :view new-view :onscreen-component updated-onscreen-component)))
 
 (defn- update-components [app-ref app components]
@@ -367,7 +424,6 @@
     (.start retroact-thread)
     retroact-cmd-chan))
 
-(defonce retroact-cmd-chan (delay (retroact-main)))
 
 (defn- alter-app-ref! [app-ref f]
   "Alters value of app-ref by applying f to the current value. Works on ref/atom/agent types and returns a valid value
@@ -431,21 +487,6 @@
        comp-id)))
   ([app-ref comp] (create-comp app-ref comp {})))
 
-(defn init-app-ref
-  "Initialize ref/atom/agent to work as state and \"app\" for Retroact components. If an application already has its
-   own ref for handling state, this fn will allow the app to use that ref with Retroact instead of the default atom
-   based empty state created by Retroact. There's no difference between using this and init-app. init-app is just a
-   shortcut to use a default atom based ref."
-  ([app-ref]
-   (let [update-view-chan (chan (sliding-buffer 1))]
-     (alter-meta! app-ref assoc :retroact {:update-view-chan update-view-chan})
-     (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
-     (swap! app-refs conj app-ref)
-     ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
-     (add-watch app-ref :retroact-watch app-watch)
-     #_(binding [*print-meta* true]
-       (prn app-ref))
-     app-ref)))
 
 ; 2022-08-24
 ; - Create fn to create component and mount it. Tow cases:
@@ -473,9 +514,66 @@
   ([]
    ; This zero arg version of init-app should be removed. It's just a wrapper to init-app-ref. Call init-app-ref
    ; directly. Create a zero arg version of init-app-ref.
-   (init-app-ref (atom {})))
+   #_(init-app-ref (atom {})))
   ([comp] (init-app comp {}))
   ([comp props]
    (let [app-ref (init-app)]
      (create-comp app-ref comp props)
+     app-ref)))
+
+
+; What do I really want to call this fn?
+; The goal is to create something that can be used to guide future calls to retroact fns to shape their behavior. The
+; result of this fn call should be just a map or something. Not some obfuscated object, though the contents will be
+; unintelligible to the user.
+; Here are some options:
+; client
+; init
+; retroact
+; context
+; toolkit
+; interface
+; ui
+; laf (for look-and-feel)
+; look-and-feel
+; configuration
+; conf
+; config
+;
+; Okay, so init-app and init-app-ref from the original Retroact design or complected and do parts of what I want.
+; Decomplect them. Simplify them. One is initializing the app ref. This one can also add the toolkit bindings and look
+; and feel to the app ref. It should, more properly, be called init-app. But I should rename it all together to avoid
+; confusion. Then the current init-app fn is actually shorthand for creating a component and initializing the app.
+; Perhaps just don't do that shorthand.
+;
+; What is the problem I'm trying to solve with the state ref and local state in the retroact-main-loop? I need state for
+; Retroact, that's part of the problem. I need state for each app-ref, which there should really only be one anyway.
+; The state is of no concern to the developer, so I don't want to store it in the app-ref. I want the developer to have
+; an easy time using Retroact without having to pass around this state - that's a criteria, not the problem.
+; The state may grow over time. I want the fn calls to be reproducible when the app state is the same. I know onscreen
+; may be different, and that's ok.
+(defn create
+  "Creates a ref (default type atom of a map) to what can be used as the application state. Retroact needs to track some
+  state and puts some state in the map under the :retroact key. Optionally, a toolkit and look and feel may be
+  specified. The look and feel (laf) is a Retroact thing and not the toolkits laf. Retroact has a way of modifying the
+  toolkit's laf from the developer's point of view.
+  old docs: Takes toolkit bindings and returns a Retroact handle to be used for initializing applications. The default
+  toolkit bindings are legacy swing and should not be used. They exist for backward compatibility. Specify a toolkit
+  using its get-<toolkit-name>-bindings fn. config is {:toolkit-bindings tb :look-and-feel laf} where both are optional
+  and the empty map is acceptable."
+  ([] (create (atom {})))
+  ([app-ref] (create app-ref {}))
+  ([app-ref opts]
+   (let [app-id (str (gensym "R"))
+         update-view-chan (chan (sliding-buffer 1))]
+     (swap! state assoc-in [:apps app-id] {:update-view-chan update-view-chan
+                                           :toolkit-bindings (:toolkit-bindings opts)
+                                           :app-ref          app-ref})
+     (alter-meta! app-ref assoc :retroact-app-id app-id)
+     (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
+     (swap! app-refs conj app-ref)
+     ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
+     (add-watch app-ref :retroact-watch app-watch)
+     #_(binding [*print-meta* true]
+         (prn app-ref))
      app-ref)))

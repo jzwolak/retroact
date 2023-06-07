@@ -89,7 +89,7 @@ something is mutable that you wish to be in there, don't mutate it.
 
 # Run
 
-Run the REPL then execute the following.
+Run the REPL then execute the following to run the greeter-app from the Retroact examples.
 
     > (require '[retroact.core :refer :all] :reload-all)
     > (require '[examples.greeter :refer :all] :reload-all)

@@ -1,5 +1,6 @@
 (ns retroact.swing.jtable
-  (:import (javax.swing JTable)
+  (:require [clojure.tools.logging :as log])
+  (:import (javax.swing JScrollPane JTable)
            (javax.swing.table AbstractTableModel)
            (retroact.swing.compiled.jtable RTableModel)))
 
@@ -14,9 +15,15 @@
            (.setData))))
 
 (defn safe-table-model-set [table f attribute]
-  (when (instance? JTable table)
+  (cond
+    (instance? JTable table)
     (let [model (.getModel table)]
-      (f model attribute))))
+      (f model attribute))
+    (instance? JScrollPane table) (safe-table-model-set (-> table (.getViewport) (.getView)) f attribute)
+    :else (log/error "skipping fn on table because component does not appear to be a table: " table)))
 
-(defn create-jtable []
-  (JTable. (RTableModel.)))
+(defn create-jtable [ui]
+  (log/info "creating jtable")
+  (if (:headers ui)
+    (JScrollPane. (JTable. (RTableModel.)))
+    (JTable. (RTableModel.))))

@@ -5,7 +5,7 @@
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]])
   (:import (java.awt Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener)
-           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JTextField JComponent JTable)
+           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JScrollPane JTextField JComponent JTable)
            (javax.swing.event DocumentListener ListSelectionListener)
            (net.miginfocom.swing MigLayout)))
 
@@ -37,7 +37,12 @@
   (set-client-prop onscreen-component "view" view))
 
 (defn get-view [onscreen-component]
-  (get-client-prop onscreen-component "view"))
+  (loop [oc onscreen-component]
+    (let [view (if oc (get-client-prop oc "view"))]
+      (cond
+        view view
+        (nil? oc) nil
+        :else (recur (.getParent oc))))))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
 
@@ -57,9 +62,22 @@
     (valueChanged [this event]
       (let [onscreen-component (.getSource event)
             selected-values (mapv get-view-or-identity (.getSelectedValuesList onscreen-component))]
-        (log/info "selection event =" event)
+        (log/info "selection event (list) =" event)
         (when (not (.getValueIsAdjusting event))
-          (selection-change-handler (:app-ref ctx) (get-client-prop onscreen-component "view") onscreen-component selected-values))))))
+          (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values))))))
+
+(defn reify-tree-list-selection-listener [ctx table selection-change-handler]
+  (reify ListSelectionListener
+    (valueChanged [this event]
+      (let [event-source (.getSource event)
+            table-model (.getModel table)
+            selected-indices (seq (.getSelectedIndices event-source))
+            _ (log/info "selected-indices = " selected-indices)
+            selected-values (mapv (fn get-item [i] (.getItemAt table-model i)) selected-indices)]
+        (log/info "selected-values = " selected-values)
+        (log/info "selection event (tree) =" event)
+        (when (not (.getValueIsAdjusting event))
+          (selection-change-handler (:app-ref ctx) (get-view table) table selected-values))))))
 
 (defn reify-document-listener-to-text-change-listener [text-change-handler]
   (reify DocumentListener
@@ -127,23 +145,19 @@
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:default       (fn default-swing-component-constructor []
+  {:default       (fn default-swing-component-constructor [ui]
                     (log/warn "using default constructor to generate a JPanel")
                     (JPanel.))
-   :border-layout #(BorderLayout.)
-   :button        #(JButton.)
-   :check-box     #(JCheckBox.)
-   :frame         #(JFrame.)
-   :label         #(JLabel.)
+   :border-layout BorderLayout
+   :button        JButton
+   :check-box     JCheckBox
+   :frame         JFrame
+   :label         JLabel
    :list          create-jlist
-   :mig-layout    #(MigLayout.)
-   :panel         #(JPanel.)
+   :mig-layout    MigLayout
+   :panel         JPanel
    :table         create-jtable
-   :text-field    #(JTextField.)}
-  #_{:frame      {:constructor #(JFrame.) :class JFrame}
-     :label      {:constructor #(JLabel.) :class JLabel}
-     :mig-layout {:constructor #(MigLayout.) :class MigLayout}
-     :button     {:constructor #(JButton.) :class JButton}})
+   :text-field    JTextField})
 
 (defn text-changed? [old-text new-text]
   (not
@@ -152,31 +166,49 @@
         (and (nil? old-text) (empty? new-text))
         (and (empty? old-text) (nil? new-text)))))
 
+(defn set-column-names
+  [c ctx column-names]
+  (safe-table-model-set c (memfn setColumnNames column-names) column-names))
+
 (defn set-row-fn
   "Set the row fn on the table model of a JTable. The row fn takes the nth element in the data vector and returns a
   vector representing the columns in that row."
   [c ctx row-fn]
-  (safe-table-model-set c (memfn setRowFn row-fn) row-fn)
-  #_(when (instance? JTable c)
-    (let [model (.getModel c)]
-      (.setRowFn model row-fn))))
+  (safe-table-model-set c (memfn setRowFn row-fn) row-fn))
 
 (defn set-data
   "Set the data for a JTable in the table model. The data is a vector of arbitrary objects, one per row. Use set-row-fn
    to define how to translate those objects into columns."
   [c ctx data]
-  (when (instance? JTable c)
+  (let [v-data (vec data)]
+    (safe-table-model-set c (memfn setData v-data) v-data))
+  #_(when (instance? JTable c)
     (let [model (.getModel c)]
-      (.setData model data))))
+      (.setData model (vec data)))))
 
 (defn set-row-editable-fn
   "Similar to set-row-fn but returns a vec of true or false representing whether each column in the row is editable. A
   value of true means the column for this row is editable. The row-editable-fn takes a single arg, which is the nth
    element of the table model data vector representing the nth row."
   [c ctx row-editable-fn]
-  (when (instance? JTable c)
+  (safe-table-model-set c (memfn setRowEditableFn row-editable-fn) row-editable-fn)
+  #_(when (instance? JTable c)
     (let [model (.getModel c)]
       (.setRowEditableFn model row-editable-fn))))
+
+(defmulti on-selection-change (fn [c _ _] (class c)))
+
+(defmethod on-selection-change JList [c ctx selection-change-handler]
+  (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
+  (.addListSelectionListener c (reify-list-selection-listener ctx selection-change-handler)))
+
+(defmethod on-selection-change JTable [table ctx selection-change-handler]
+  (let [selection-model (.getSelectionModel table)]
+    (doseq [sl (vec (.getListeners table ListSelectionListener))] (.removeListSelectionListener selection-model sl))
+    (.addListSelectionListener selection-model (reify-tree-list-selection-listener ctx table selection-change-handler))))
+
+(defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
+  (on-selection-change (.getView (.getViewport c)) ctx selection-change-handler))
 
 (defn on-set-value-at
   "The set-value-at-handler has args [app-ref old-item new-value row col] where row and col are the row and column of
@@ -188,7 +220,7 @@
   [c ctx set-value-at-handler]
   (safe-table-model-set c (memfn setSetValueAtFn set-value-at-fn)
                         (fn set-value-at-fn [old-item new-value row col]
-                          (set-value-at-handler (:app-ref ctx) old-item new-value row col))))
+                          (set-value-at-handler (:app-ref ctx) (get-view c) old-item new-value row col))))
 
 (def attr-appliers
   {:background          (fn set-background [c ctx color] (cond
@@ -224,9 +256,11 @@
    :layout-constraints  (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    :row-constraints     (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints  (fn set-column-constraints [c ctx constraints] (.setColumnConstraints c constraints))
+   ; Table attr appliers
+   :column-names        set-column-names
+   :row-editable-fn     set-row-editable-fn
    :row-fn              set-row-fn
    :table-data          set-data
-   :row-editable-fn     set-row-editable-fn
 
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
    :on-action           (fn on-action [c ctx action-handler]
@@ -237,9 +271,7 @@
                             (.removeActionListener c al))
                           (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
                                                                          (action-handler (:app-ref ctx) action-event)))))
-   :on-selection-change (fn on-selection-change [c ctx selection-change-handler]
-                          (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
-                          (.addListSelectionListener c (reify-list-selection-listener ctx selection-change-handler)))
+   :on-selection-change on-selection-change
    :on-text-change      (fn on-text-change [c ctx text-change-handler]
                           #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
                               (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))

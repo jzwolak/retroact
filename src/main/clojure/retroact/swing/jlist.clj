@@ -18,7 +18,7 @@
         (.setEnabled child (.isEnabled list))
         child))))
 
-(defn create-jlist []
+(defn create-jlist [ui]
   (let [jlist (JList. (DefaultListModel.))]
     (.setCellRenderer jlist (create-cell-renderer))
     jlist))

@@ -1,6 +1,5 @@
 (ns retroact.swing.compiled.jtable
-  (:require [clojure.tools.logging :as log])
-  (:import (clojure.lang IPersistentVector IFn)))
+  (:require [clojure.tools.logging :as log]))
 
 
 ; TODO: I could use a `:gen-class` in the `ns` form above. That may simplify this file.
@@ -13,8 +12,8 @@
 ; Take an
 ; - app ref
 ; - fn to get data (or path to data) as vector of rows
-; - fn to get colomns from a row
-; - or maybe just a fn to get matrix of data
+; - fn to get colomns from a row (row-fn)
+; - or maybe just a fn to get matrix of data (this idea was discarded, though, the default row-fn is the identity fn)
 ; Retroact knows when the data has changed and can tell the table model to update. If the app ref has changed or any of
 ; the data fns, then Retroact creates a new table model and sets the new table model on the JTable.
 (gen-class
@@ -23,22 +22,21 @@
   :state "state"
   :init "init-state"
   :prefix "rtable-model-"
-  :methods [[setRowFn [clojure.lang.IFn] void]
+  :methods [[getItemAt [java.lang.Integer] Object]
+            [setColumnNames [clojure.lang.IPersistentVector] void]
             [setData [clojure.lang.IPersistentVector] void]
+            [setRowFn [clojure.lang.IFn] void]
             [setRowEditableFn [clojure.lang.IFn] void]
             [setSetValueAtFn [clojure.lang.IFn] void]])
 
 (defn rtable-model-init-state []
-  (log/info "init table state")
   (let [state (atom {:data   []
                      :row-fn identity})]
-    (log/info "returning from init table state")
     [[] state]))
 
 (defn rtable-model-getRowCount [this] (let [state @(.state this)] (count (:data state))))
 
 (defn rtable-model-getColumnCount [this]
-  (log/info "get column count")
   (let [state @(.state this)
         data (:data state)
         first-row (first data)
@@ -48,7 +46,6 @@
       0)))
 
 (defn rtable-model-getColumnName [this col]
-  (log/info "get column name")
   (let [state @(.state this)
         column-names (:column-names state)]
     (if column-names
@@ -75,6 +72,8 @@
 
 (defn- get-item-at [state row]
   (let [data (:data state)]
+    (log/info "data = " data)
+    (log/info "item = " (nth data row))
     (nth data row)))
 
 (defn- get-value-at [state row col]
@@ -84,8 +83,11 @@
         (row-fn)
         (nth col))))
 
+(defn rtable-model-getItemAt [this row]
+  (log/info "getting item at row " row)
+  (get-item-at @(.state this) row))
+
 (defn rtable-model-getValueAt [this row col]
-  (log/info "get value at" row "," col)
   (get-value-at @(.state this) row col))
 
 (defn rtable-model-setValueAt [this value row col]
@@ -96,15 +98,18 @@
         old-item (get-item-at state row)]
     (set-value-at-fn old-item value row col)))
 
+(defn rtable-model-setColumnNames [this column-names]
+  (let [state-atom (.state this)]
+    (swap! state-atom assoc :column-names column-names)
+    (.fireTableStructureChanged this)))
+
 (defn rtable-model-setData [this data]
   (let [state-atom (.state this)]
-    (log/info "setting table data to" data)
     (swap! state-atom assoc :data data)
     (.fireTableStructureChanged this)))
 
 (defn rtable-model-setRowFn [this row-fn]
   (let [state-atom (.state this)]
-    (log/info "set row fn")
     (swap! state-atom assoc :row-fn row-fn)
     (.fireTableStructureChanged this)))
 

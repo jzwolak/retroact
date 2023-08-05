@@ -137,28 +137,30 @@
   [{:keys [onscreen-component app-ref old-view new-view]}]
   (log/info "applying attributes" (:class new-view) "log msg3")
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
-    (doseq [attr (set (keys new-view))]
-      (when-let [attr-applier (get attr-appliers attr)]
-        (cond
-          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
-          ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
-          ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
-          ; to be moved to apply-attributes or recursive itself.
-          (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
-          (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
-          ; Assume attr-applier is a fn and call it on the component.
-          :else (when (not (= (get old-view attr) (get new-view attr)))
-                  ; TODO: check if attr is a map for a component and apply attributes to it before calling this
-                  ; attr-applier, then pass the result to this attr-applier.
-                  (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr))))))
+    (let [final-attr-appliers (merge attr-appliers (get-in @app-ref [:retroact :attr-appliers]))]
+      (doseq [attr (set (keys new-view))]
+        (when-let [attr-applier (get final-attr-appliers attr)]
+          (cond
+            ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
+            ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
+            ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
+            ; to be moved to apply-attributes or recursive itself.
+            (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
+            (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component {:app-ref app-ref} attr old-view new-view)
+            ; Assume attr-applier is a fn and call it on the component.
+            :else (when (not (= (get old-view attr) (get new-view attr)))
+                    ; TODO: check if attr is a map for a component and apply attributes to it before calling this
+                    ; attr-applier, then pass the result to this attr-applier.
+                    (attr-applier onscreen-component {:app-ref app-ref :new-view new-view} (get new-view attr)))))))
     (assoc-view onscreen-component new-view))
   onscreen-component)
 
 (defn instantiate-class
-  [ui]
+  [ctx ui]
   (let [id (:class ui)
         _ (log/info "building ui for" id "log msg4")
-        class-or-fn (get-in class-map [(:class ui)] (get class-map :default))
+        final-class-map (merge class-map (:class-map ctx))
+        class-or-fn (get-in final-class-map [(:class ui)] (get final-class-map :default))
         component
         (cond
           (instance? Class class-or-fn)
@@ -172,7 +174,7 @@
 (defn build-ui
   "Take a view and realize it."
   [app-ref view]
-  (let [onscreen-component (instantiate-class view)]
+  (let [onscreen-component (instantiate-class (:retroact @app-ref) view)]
     (apply-attributes {:onscreen-component onscreen-component :app-ref app-ref :new-view view})))
 
 
@@ -263,7 +265,7 @@
 ; "start-main-loop" then.
 
 (defn- update-onscreen-component [{:keys [app-ref onscreen-component old-view new-view]}]
-  (let [onscreen-component (or onscreen-component (instantiate-class new-view))]
+  (let [onscreen-component (or onscreen-component (instantiate-class (:retroact @app-ref) new-view))]
     (apply-attributes {:app-ref app-ref :onscreen-component onscreen-component :old-view old-view :new-view new-view})
     onscreen-component))
 
@@ -430,6 +432,16 @@
        (run-cmd app-ref [:add-component {:app-ref app-ref :app app :component comp}])
        comp-id)))
   ([app-ref comp] (create-comp app-ref comp {})))
+
+(defn- register-comp-type
+  [class-key klass attr-appliers app-val]
+  (-> (update-in app-val [:retroact :class-map] merge {class-key klass})
+      (update-in [:retroact :attr-appliers] merge attr-appliers)))
+
+(defn register-comp-type!
+  [app-ref class-key klass attr-appliers]
+  (alter-app-ref! app-ref (partial register-comp-type class-key klass attr-appliers))
+  app-ref)
 
 (defn init-app-ref
   "Initialize ref/atom/agent to work as state and \"app\" for Retroact components. If an application already has its

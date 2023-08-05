@@ -72,8 +72,6 @@
 
 (defn- get-item-at [state row]
   (let [data (:data state)]
-    (log/info "data = " data)
-    (log/info "item = " (nth data row))
     (nth data row)))
 
 (defn- get-value-at [state row col]

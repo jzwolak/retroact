@@ -2,11 +2,14 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.tools.logging :as log]
             [retroact.swing.jlist :refer [create-jlist]]
-            [retroact.swing.jtable :refer [create-jtable safe-table-model-set]])
+            [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
+                                          set-tree-toggle-click-count]]
+            [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
+            [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (java.awt Color Component Container Dimension BorderLayout)
-           (java.awt.event ActionListener)
-           (javax.swing JButton JCheckBox JFrame JLabel JList JPanel JScrollPane JTextField JComponent JTable)
-           (javax.swing.event DocumentListener ListSelectionListener)
+           (java.awt.event ActionListener MouseAdapter)
+           (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JTextField JComponent JTable JTree SwingUtilities)
+           (javax.swing.event DocumentListener ListSelectionListener TreeSelectionListener)
            (net.miginfocom.swing MigLayout)))
 
 
@@ -52,10 +55,29 @@
    :exit JFrame/EXIT_ON_CLOSE
    :hide JFrame/HIDE_ON_CLOSE})
 
-(defn reify-action-listener [action-handler]
+(defn reify-action-listener
+  [action-handler]
   (reify ActionListener
     (actionPerformed [this action-event]
       (action-handler action-event))))
+
+(defn proxy-mouse-listener-click [app-ref click-handler]
+  (proxy [MouseAdapter] []
+    (mousePressed [mouse-event]
+      (log/info "mouse pressed")
+      (click-handler app-ref mouse-event))
+    (mouseClicked [mouse-event]
+      (log/info "mouse clicked")
+      (click-handler app-ref mouse-event))))
+
+(defn reify-tree-selection-listener [ctx selection-change-handler]
+  (reify TreeSelectionListener
+    (valueChanged [this event]
+      (let [onscreen-component (.getSource event)
+            selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
+        (log/info "selection event (tree) =" event)
+        (log/info "selected values: " selected-values)
+        (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
 
 (defn reify-list-selection-listener [ctx selection-change-handler]
   (reify ListSelectionListener
@@ -151,13 +173,15 @@
    :border-layout BorderLayout
    :button        JButton
    :check-box     JCheckBox
+   :combo-box     create-jcombobox
    :frame         JFrame
    :label         JLabel
    :list          create-jlist
    :mig-layout    MigLayout
    :panel         JPanel
    :table         create-jtable
-   :text-field    JTextField})
+   :text-field    JTextField
+   :tree          create-jtree})
 
 (defn text-changed? [old-text new-text]
   (not
@@ -165,6 +189,12 @@
         ; empty string and nil are treated the same. See JTextComponent.setText().
         (and (nil? old-text) (empty? new-text))
         (and (empty? old-text) (nil? new-text)))))
+
+(defn set-combo-box-data
+  [c ctx data]
+  (let [model (.getModel c)]
+    (.removeAllElements model)
+    (.addAll model data)))
 
 (defn set-column-names
   [c ctx column-names]
@@ -176,7 +206,7 @@
   [c ctx row-fn]
   (safe-table-model-set c (memfn setRowFn row-fn) row-fn))
 
-(defn set-data
+(defn set-table-data
   "Set the data for a JTable in the table model. The data is a vector of arbitrary objects, one per row. Use set-row-fn
    to define how to translate those objects into columns."
   [c ctx data]
@@ -196,7 +226,30 @@
     (let [model (.getModel c)]
       (.setRowEditableFn model row-editable-fn))))
 
+(defn set-row-selection-interval [c ctx [start end]]
+  (if (instance? JScrollPane c)
+    (set-row-selection-interval (.getView (.getViewport c)) ctx [start end])
+    (if (instance? JTable c)
+      (SwingUtilities/invokeLater
+        #(do
+          (log/info "start and end = " start ", " end)
+          (log/info "c = " c)
+          (if (and start end)
+            (.setRowSelectionInterval c start end)
+            (.clearSelection c)))))))
+
 (defmulti on-selection-change (fn [c _ _] (class c)))
+
+(defmethod on-selection-change JComboBox [c ctx selection-change-handler]
+  (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
+  (.addActionListener c (reify-action-listener
+                          (fn [ae]
+                            (let [selected-item (.getSelectedItem (.getModel c))]
+                              (selection-change-handler ctx ae selected-item))))))
+
+(defmethod on-selection-change JTree [c ctx selection-change-handler]
+  (doseq [sl (vec (.getTreeSelectionListeners c))] (.removeTreeSelectionListener c sl))
+  (.addTreeSelectionListener c (reify-tree-selection-listener ctx selection-change-handler)))
 
 (defmethod on-selection-change JList [c ctx selection-change-handler]
   (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
@@ -222,64 +275,89 @@
                         (fn set-value-at-fn [old-item new-value row col]
                           (set-value-at-handler (:app-ref ctx) (get-view c) old-item new-value row col))))
 
+(defn on-click
+  [c ctx click-handler]
+  (log/info "adding mouse click listener for " c)
+  (if (not (instance? JScrollPane c))
+    (.addMouseListener
+      c (proxy-mouse-listener-click (:app-ref ctx) click-handler))
+    (let [child (.getView (.getViewport c))]
+      (on-click child ctx click-handler))))
+
 (def attr-appliers
-  {:background          (fn set-background [c ctx color] (cond
+  {:background             (fn set-background [c ctx color] (cond
                                                            (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
                                                            :else (.setBackground c (Color. color))))
-   :border              (fn set-border [c ctx border] (.setBorder c border))
-   :data                (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
+   :border                 (fn set-border [c ctx border] (.setBorder c border))
+   :enabled                (fn set-enabled [c ctx enabled] (.setEnabled c enabled))
+   :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
+   :data                   (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
    ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.
-   :margin              (fn set-margin [c ctx insets] (.setMargin c insets))
-   :height              set-height
-   :layout              {:set (fn set-layout [c ctx layout] (.setLayout c layout))
+   :margin                 (fn set-margin [c ctx insets] (.setMargin c insets))
+   :height                 set-height
+   :layout                 {:set (fn set-layout [c ctx layout] (.setLayout c layout))
                          :get (fn get-layout [c ctx]
                                 (cond
                                   (instance? JFrame c) (.getLayout (.getContentPane c))
                                   :else (.getLayout c)))}
-   :opaque              (fn set-opaque [c ctx opaque] (cond
+   :opaque                 (fn set-opaque [c ctx opaque] (cond
                                                         (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
                                                         :else (.setOpaque c opaque)))
-   :selected            (fn set-selected [c ctx selected?]
-                          (.setSelected c selected?))
-   :selection-mode      (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
-   :text                (fn set-text [c ctx text]
-                          #_(.printStackTrace (Exception. "stack trace"))
-                          (let [old-text (.getText c)]
-                            (log/info (str "new-text = \"" text "\" old-text = \"" old-text "\""))
-                            (log/info (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
-                            (when (text-changed? old-text text)
-                              (.setText c text))))
-   :width               set-width
-   :caret-position      (fn set-caret-position [c ctx position] (.setCaretPosition c position))
+   :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
+   :row-selection-interval set-row-selection-interval
+   :selected               (fn set-selected [c ctx selected?]
+                             (.setSelected c selected?))
+   :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
+   :text                   (fn set-text [c ctx text]
+                             #_(.printStackTrace (Exception. "stack trace"))
+                             (let [old-text (.getText c)]
+                               (log/info (str "new-text = \"" text "\" old-text = \"" old-text "\""))
+                               (log/info (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
+                               (when (text-changed? old-text text)
+                                 (.setText c text))))
+   :width                  set-width
+   :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
    ; TODO: if action not in on-close-action-map, then add it as a WindowListener to the close event
-   :on-close            (fn on-close [c ctx action] (.setDefaultCloseOperation c (on-close-action-map action)))
-   :layout-constraints  (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
-   :row-constraints     (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
-   :column-constraints  (fn set-column-constraints [c ctx constraints] (.setColumnConstraints c constraints))
+   :on-close               (fn on-close [c ctx action] (.setDefaultCloseOperation c (on-close-action-map action)))
+   :layout-constraints     (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
+   :row-constraints        (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
+   :column-constraints     (fn set-column-constraints [c ctx constraints]
+                             (log/info "setting column constraints to " constraints)
+                             (.setColumnConstraints c constraints))
+   ; Combo Box attr appliers
+   :combo-box-data         set-combo-box-data
+   :selected-item          (fn set-selected-item [c ctx item] (.setSelectedItem c item))
    ; Table attr appliers
-   :column-names        set-column-names
-   :row-editable-fn     set-row-editable-fn
-   :row-fn              set-row-fn
-   :table-data          set-data
+   :column-names           set-column-names
+   :row-editable-fn        set-row-editable-fn
+   :row-fn                 set-row-fn
+   :table-data             set-table-data
+   ; Tree attr appliers
+   :tree-render-fn         set-tree-render-fn
+   :tree-model-fn          set-tree-model-fn
+   :tree-data              set-tree-data
+   :toggle-click-count     set-tree-toggle-click-count
 
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
-   :on-action           (fn on-action [c ctx action-handler]
-                          (log/info "registering action listener for component: " c)
-                          #_(if (instance? JCheckBox c) (action-handler (:app-ref ctx) nil))
-                          (doseq [al (vec (.getActionListeners c))]
-                            (log/info "removing action listener" al " for " c)
-                            (.removeActionListener c al))
-                          (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
-                                                                         (action-handler (:app-ref ctx) action-event)))))
-   :on-selection-change on-selection-change
-   :on-text-change      (fn on-text-change [c ctx text-change-handler]
-                          #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
-                              (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
-                          (.addDocumentListener (.getDocument c)
-                                                (reify-document-listener-to-text-change-listener
-                                                  (fn text-change-handler-clojure [doc-event]
-                                                    (text-change-handler (:app-ref ctx) (.getText c))))))
-   :on-set-value-at     on-set-value-at
+   :on-action              (fn on-action [c ctx action-handler]
+                             (log/info "registering action listener for component: " c)
+                             #_(if (instance? JCheckBox c) (action-handler (:app-ref ctx) nil))
+                             (doseq [al (vec (.getActionListeners c))]
+                               (log/info "removing action listener" al " for " c)
+                               (.removeActionListener c al))
+                             (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
+                                                                            (action-handler (:app-ref ctx) action-event)))))
+   :on-selection-change    on-selection-change
+   :on-text-change         (fn on-text-change [c ctx text-change-handler]
+                             #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
+                                 (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
+                             (.addDocumentListener (.getDocument c)
+                                                   (reify-document-listener-to-text-change-listener
+                                                     (fn text-change-handler-clojure [doc-event]
+                                                       (text-change-handler (:app-ref ctx) (.getText c))))))
+   :on-set-value-at        on-set-value-at
+   ; Mouse listeners
+   :on-click               on-click
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:
@@ -287,8 +365,8 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents            {:get-existing-children get-existing-children
-                         :add-new-child-at      add-new-child-at
-                         :remove-child-at       remove-child-at
-                         :get-child-at          get-child-at}
+   :contents               {:get-existing-children get-existing-children
+                            :add-new-child-at      add-new-child-at
+                            :remove-child-at       remove-child-at
+                            :get-child-at          get-child-at}
    })

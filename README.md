@@ -168,3 +168,21 @@ You may be wondering about the mutability of `myComponent` and the earlier state
 in Retroact components. This is precisely the exception, but it's also important to note that Retroact is only seeing
 the reference value and not the object value. Since the component is not changing, the reference value is not changing
 and, as far as Retroact is concerned, the Retroact component is a _value_, though not in the strictest of senses.
+
+## Handler Fns
+
+Handler fns are better specified as named fns rather than anonymous fns.
+
+```clojure
+:on-action handler
+```
+is better than
+```clojure
+:on-action (fn [app-ref action-event] ...)
+```
+
+This is because the render fn is called every time something changes. An anonymous function will have a different name
+and id each time and therefore Retroact will see it as a different fn. Retroact will then remove the old handler and add
+the new one even if the actual code inside is identical.
+
+In some cases the attribute may not properly remove the previous fn, though this would be considered a bug.

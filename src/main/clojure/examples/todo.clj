@@ -136,7 +136,8 @@
                     ; tracking the text as it changes doesn't work. I get exceptions and the caret position isn't
                     ; preserved.
                     :on-text-change handle-new-todo-item-text-change
-                    :on-action      handle-new-todo-item}]})
+                    :on-action      handle-new-todo-item
+                    #_(fn [app-ref action-event] (handle-new-todo-item app-ref action-event))}]})
 
    })
 

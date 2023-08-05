@@ -6,7 +6,7 @@ plugins {
     id 'signing'
 }
 
-version = "0.2.4"
+version = "0.2.5"
 group = "com.insilicalabs"
 
 
@@ -38,6 +38,7 @@ clojure {
     builds {
         main {
             aotNamespaces.add("retroact.swing.compiled.jtable")
+            aotNamespaces.add("retroact.swing.compiled.jtree")
         }
     }
 }

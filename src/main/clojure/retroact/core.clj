@@ -439,6 +439,8 @@
       (update-in [:retroact :attr-appliers] merge attr-appliers)))
 
 (defn register-comp-type!
+  "Add custom components and their attribute appliers. This may be useful when extending a Java Swing component, for
+   instance - though preference should be given to using the existing components when possible."
   [app-ref class-key klass attr-appliers]
   (alter-app-ref! app-ref (partial register-comp-type class-key klass attr-appliers))
   app-ref)

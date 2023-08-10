@@ -1,14 +1,15 @@
 (ns retroact.swing
   (:require [clojure.pprint :refer [pprint]]
             [clojure.tools.logging :as log]
+            [clojure.set :refer [difference]]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
-  (:import (java.awt Color Component Container Dimension BorderLayout)
+  (:import (java.awt CardLayout Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener MouseAdapter)
-           (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JTextField JComponent JTable JTree SwingUtilities)
+           (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree SwingUtilities)
            (javax.swing.event DocumentListener ListSelectionListener TreeSelectionListener)
            (net.miginfocom.swing MigLayout)))
 
@@ -17,6 +18,9 @@
 
 (defn redraw-onscreen-component [c]
   (.revalidate c))
+
+(defn run-on-toolkit-thread [f & args]
+  (SwingUtilities/invokeLater #(apply f args)))
 
 (defmulti set-client-prop (fn [comp name value] (class comp)))
 (defmethod set-client-prop JComponent [comp name value]
@@ -54,6 +58,10 @@
    :do-nothing JFrame/DO_NOTHING_ON_CLOSE
    :exit JFrame/EXIT_ON_CLOSE
    :hide JFrame/HIDE_ON_CLOSE})
+
+(def orientation-map
+  {:vertical JSplitPane/VERTICAL_SPLIT
+   :horizontal JSplitPane/HORIZONTAL_SPLIT})
 
 (defn reify-action-listener
   [action-handler]
@@ -107,6 +115,15 @@
     (insertUpdate [this document-event] (text-change-handler document-event))
     (removeUpdate [this document-event] (text-change-handler document-event))))
 
+(defn update-client-properties [c ctx properties]
+  (let [{:keys [old-view attr]} ctx
+        old-properties (get old-view attr)
+        old-keys (set (keys (into {} old-properties)))
+        new-keys (set (keys (into {} properties)))
+        missing-keys (difference old-keys new-keys)]
+    (doseq [k missing-keys] (.putClientProperty c k nil))
+    (doseq [[k v] properties] (.putClientProperty c k v))))
+
 (defn set-width [c ctx width]
   (let [height (-> c .getSize .getHeight)]
     (.setSize c (Dimension. width height))))
@@ -127,20 +144,30 @@
         (.elements)
         (enumeration-seq)
         (vec))))
+(defmethod get-existing-children JTabbedPane [tabbed-pane]
+  (let [num-tabs (.getTabCount tabbed-pane)]
+    (mapv #(.getTabComponentAt tabbed-pane %) (range 0 num-tabs))))
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
-(defmethod add-new-child-at Container [^Container c ^Component child constraints index] (.add ^Container c child constraints ^int index))
+(defmethod add-new-child-at Container [^Container c ^Component child constraints index]
+  (log/info "adding child for container at" index)
+  (log/info "class of container is" (class c))
+  (.add ^Container c child constraints ^int index))
 (defmethod add-new-child-at JFrame [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
 (defmethod add-new-child-at JList [^JList jlist ^Component child constraints index]
   (let [model (.getModel jlist)]
     (println "jlist add-new-child-at" index "(model class:" (class model) " size =" (.getSize model) ")" child)
     (.add model index child)
     child))
+(defmethod add-new-child-at JTabbedPane [tabbed-pane child constraints index]
+  (log/info "adding tabbed pane child at " index)
+  (.insertTab tabbed-pane "New Tab" nil child nil index))
 
 (defmulti remove-child-at (fn [container index] (class container)))
 (defmethod remove-child-at Container [c index] (.remove c index))
 (defmethod remove-child-at JFrame [c index] (.remove (.getContentPane c) index))
 (defmethod remove-child-at JList [jlist index] (println "JList remove-child-at not implemented yet"))
+(defmethod remove-child-at JTabbedPane [tabbed-pane index] (.removeTabAt tabbed-pane index))
 
 (defmulti get-child-at (fn [container index] (class container)))
 (defmethod get-child-at Container [c index] (.getComponent c index))
@@ -152,6 +179,7 @@
             (.getElementAt index))]
     (println "jlist get-child-at:" child)
     child))
+(defmethod get-child-at JTabbedPane [tabbed-pane index] (.getComponentAt tabbed-pane index))
 ; end :contents fns
 
 
@@ -172,6 +200,7 @@
                     (JPanel.))
    :border-layout BorderLayout
    :button        JButton
+   :card-layout   CardLayout
    :check-box     JCheckBox
    :combo-box     create-jcombobox
    :frame         JFrame
@@ -179,8 +208,11 @@
    :list          create-jlist
    :mig-layout    MigLayout
    :panel         JPanel
+   :split-pane    JSplitPane
+   :tabbed-pane   JTabbedPane
    :table         create-jtable
    :text-field    JTextField
+   :tool-bar      JToolBar
    :tree          create-jtree})
 
 (defn text-changed? [old-text new-text]
@@ -284,11 +316,15 @@
     (let [child (.getView (.getViewport c))]
       (on-click child ctx click-handler))))
 
+
+; *** :render and :class are reserved attributes, do not use! ***
 (def attr-appliers
   {:background             (fn set-background [c ctx color] (cond
                                                            (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
                                                            :else (.setBackground c (Color. color))))
    :border                 (fn set-border [c ctx border] (.setBorder c border))
+   :client-properties      update-client-properties
+   :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :enabled                (fn set-enabled [c ctx enabled] (.setEnabled c enabled))
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
    :data                   (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
@@ -296,17 +332,18 @@
    :margin                 (fn set-margin [c ctx insets] (.setMargin c insets))
    :height                 set-height
    :layout                 {:set (fn set-layout [c ctx layout] (.setLayout c layout))
-                         :get (fn get-layout [c ctx]
-                                (cond
-                                  (instance? JFrame c) (.getLayout (.getContentPane c))
-                                  :else (.getLayout c)))}
+                            :get (fn get-layout [c ctx]
+                                   (cond
+                                     (instance? JFrame c) (.getLayout (.getContentPane c))
+                                     :else (.getLayout c)))}
+   :name                   (fn set-name [c ctx name] (.setName c name))
    :opaque                 (fn set-opaque [c ctx opaque] (cond
-                                                        (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
-                                                        :else (.setOpaque c opaque)))
-   :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
+                                                           (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
+                                                           :else (.setOpaque c opaque)))
    :row-selection-interval set-row-selection-interval
    :selected               (fn set-selected [c ctx selected?]
                              (.setSelected c selected?))
+   :selected-index         (fn set-selected-index [c ctx index] (.setSelectedIndex c index))
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
    :text                   (fn set-text [c ctx text]
                              #_(.printStackTrace (Exception. "stack trace"))
@@ -327,6 +364,18 @@
    ; Combo Box attr appliers
    :combo-box-data         set-combo-box-data
    :selected-item          (fn set-selected-item [c ctx item] (.setSelectedItem c item))
+   ; Split Pane attr appliers
+   :left-component         {:set (fn set-left-comp [c ctx comp] (.setLeftComponent c comp))
+                            :get (fn get-left-comp [c ctx] (.getLeftComponent c))}
+   :right-component        {:set (fn set-right-comp [c ctx comp] (.setRightComponent c comp))
+                            :get (fn get-right-comp [c ctx] (.getRightComponent c))}
+   :top-component          {:set (fn set-top-comp [c ctx comp] (.setTopComponent c comp))
+                            :get (fn get-top-comp [c ctx] (.getTopComponent c))}
+   :bottom-component       {:set (fn set-bottom-comp [c ctx comp] (.setBottomComponent c comp))
+                            :get (fn get-bottom-comp [c ctx] (.getBottomComponent c))}
+   :one-touch-expandable   (fn set-one-touch-expandable [c ctx expandable] (.setOneTouchExpandable c expandable))
+   :orientation            (fn set-orientation [c ctx orientation] (.setOrientation c (orientation-map orientation)))
+   :divider-location       (fn set-divider-location [c ctx location] (.setDividerLocation c ^Integer location))
    ; Table attr appliers
    :column-names           set-column-names
    :row-editable-fn        set-row-editable-fn
@@ -370,3 +419,10 @@
                             :remove-child-at       remove-child-at
                             :get-child-at          get-child-at}
    })
+
+(def toolkit-config
+  {:attr-appliers `attr-appliers
+   :assoc-view `assoc-view
+   :redraw-onscreen-component `redraw-onscreen-component
+   :class-map `class-map
+   :run-on-toolkit-thread `run-on-toolkit-thread})

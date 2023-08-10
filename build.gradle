@@ -55,6 +55,7 @@ checkClojure {
     classpath.from(clojure.builds.main.outputDir)
 }
 
+// The following duplicates a later clojureRepl. Perhaps combine the two.
 clojureRepl {
     dependsOn compileClojure
     // I'm not sure if this is necessary, but it was for checkClojure, so I leave it here until I can test.

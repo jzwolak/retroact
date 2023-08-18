@@ -130,7 +130,7 @@
 (defn- replace-child-at
   [ctx remove-child-at add-new-child-at component new-child index]
   (run-on-toolkit-thread ctx remove-child-at component index)
-  (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) (:constraints new-child) index))
+  (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index))
 
 (defn- apply-children-applier
   [attr-applier component ctx attr old-view new-view]
@@ -150,7 +150,7 @@
       #_(log/info "child index" index "| old-child =" old-child "log msg1")
       #_(log/info "child index" index "| new-child =" new-child "log msg2")
       (cond
-        (nil? old-child) (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) (:constraints new-child) index)
+        (nil? old-child) (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index)
         (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
         (and old-child new-child) (apply-attributes
                                     (assoc ctx

@@ -141,16 +141,19 @@
     (mapv #(.getTabComponentAt tabbed-pane %) (range 0 num-tabs))))
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
-(defmethod add-new-child-at Container [^Container c ^Component child constraints index]
-  (.add ^Container c child constraints ^int index))
-(defmethod add-new-child-at JFrame [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
-(defmethod add-new-child-at JList [^JList jlist ^Component child constraints index]
+(defmethod add-new-child-at Container [^Container c ^Component child view index]
+  (.add ^Container c child (:constraints view) ^int index))
+(defmethod add-new-child-at JFrame [^Container c ^Component child view index] (.add ^Container (.getContentPane c) child (:constraints view) ^int index))
+(defmethod add-new-child-at JList [^JList jlist ^Component child view index]
   (let [model (.getModel jlist)]
     (println "jlist add-new-child-at" index "(model class:" (class model) " size =" (.getSize model) ")" child)
     (.add model index child)
     child))
-(defmethod add-new-child-at JTabbedPane [tabbed-pane child constraints index]
-  (.insertTab tabbed-pane "New Tab" nil child nil index))
+(defmethod add-new-child-at JTabbedPane [tabbed-pane child view index]
+  (let [title (or (:tab-title view) "New Tab")
+        icon (:tab-icon view)
+        tooltip (:tab-tooltip view)]
+    (.insertTab tabbed-pane title icon child tooltip index)))
 
 (defmulti remove-child-at (fn [container index] (class container)))
 (defmethod remove-child-at Container [c index] (.remove c index))
@@ -216,6 +219,17 @@
   (let [model (.getModel c)]
     (.removeAllElements model)
     (.addAll model data)))
+
+(defn set-tab-title
+  [c ctx title]
+  (let [parent (.getParent c)
+        [tabbed-pane child] (if (instance? JScrollPane parent)
+                              [(.getParent parent) parent]
+                              [parent c])]
+    (if (instance? JTabbedPane tabbed-pane)
+      (let [index (.indexOfComponent tabbed-pane child)]
+        (.setTitleAt tabbed-pane index title))
+      (log/warn "could not set title for tab because component is not a child of a tabbed pane"))))
 
 (defn set-column-names
   [c ctx column-names]
@@ -360,6 +374,8 @@
    :one-touch-expandable   (fn set-one-touch-expandable [c ctx expandable] (.setOneTouchExpandable c expandable))
    :orientation            (fn set-orientation [c ctx orientation] (.setOrientation c (orientation-map orientation)))
    :divider-location       (fn set-divider-location [c ctx location] (.setDividerLocation c ^Integer location))
+   ; Tabbed Pane attr appliers
+   :tab-title              set-tab-title
    ; Table attr appliers
    :column-names           set-column-names
    :row-editable-fn        set-row-editable-fn

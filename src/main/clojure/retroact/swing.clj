@@ -72,10 +72,8 @@
 (defn proxy-mouse-listener-click [app-ref click-handler]
   (proxy [MouseAdapter] []
     (mousePressed [mouse-event]
-      (log/info "mouse pressed")
       (click-handler app-ref mouse-event))
     (mouseClicked [mouse-event]
-      (log/info "mouse clicked")
       (click-handler app-ref mouse-event))))
 
 (defn reify-tree-selection-listener [ctx selection-change-handler]
@@ -83,8 +81,6 @@
     (valueChanged [this event]
       (let [onscreen-component (.getSource event)
             selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
-        (log/info "selection event (tree) =" event)
-        (log/info "selected values: " selected-values)
         (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
 
 (defn reify-list-selection-listener [ctx selection-change-handler]
@@ -92,7 +88,6 @@
     (valueChanged [this event]
       (let [onscreen-component (.getSource event)
             selected-values (mapv get-view-or-identity (.getSelectedValuesList onscreen-component))]
-        (log/info "selection event (list) =" event)
         (when (not (.getValueIsAdjusting event))
           (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values))))))
 
@@ -102,10 +97,7 @@
       (let [event-source (.getSource event)
             table-model (.getModel table)
             selected-indices (seq (.getSelectedIndices event-source))
-            _ (log/info "selected-indices = " selected-indices)
             selected-values (mapv (fn get-item [i] (.getItemAt table-model i)) selected-indices)]
-        (log/info "selected-values = " selected-values)
-        (log/info "selection event (tree) =" event)
         (when (not (.getValueIsAdjusting event))
           (selection-change-handler (:app-ref ctx) (get-view table) table selected-values))))))
 
@@ -139,7 +131,7 @@
 (defmethod get-existing-children JFrame [c] (.getComponents (.getContentPane c)))
 (defmethod get-existing-children JList [jlist]
   (let [model (.getModel jlist)]
-    (log/info "JList get-existing-children not implemented")
+    (log/warn "JList get-existing-children not implemented")
     (-> model
         (.elements)
         (enumeration-seq)
@@ -150,8 +142,6 @@
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
 (defmethod add-new-child-at Container [^Container c ^Component child constraints index]
-  (log/info "adding child for container at" index)
-  (log/info "class of container is" (class c))
   (.add ^Container c child constraints ^int index))
 (defmethod add-new-child-at JFrame [^Container c ^Component child constraints index] (.add ^Container (.getContentPane c) child constraints ^int index))
 (defmethod add-new-child-at JList [^JList jlist ^Component child constraints index]
@@ -160,7 +150,6 @@
     (.add model index child)
     child))
 (defmethod add-new-child-at JTabbedPane [tabbed-pane child constraints index]
-  (log/info "adding tabbed pane child at " index)
   (.insertTab tabbed-pane "New Tab" nil child nil index))
 
 (defmulti remove-child-at (fn [container index] (class container)))
@@ -264,9 +253,7 @@
     (if (instance? JTable c)
       (SwingUtilities/invokeLater
         #(do
-          (log/info "start and end = " start ", " end)
-          (log/info "c = " c)
-          (if (and start end)
+           (if (and start end)
             (.setRowSelectionInterval c start end)
             (.clearSelection c)))))))
 
@@ -309,7 +296,6 @@
 
 (defn on-click
   [c ctx click-handler]
-  (log/info "adding mouse click listener for " c)
   (if (not (instance? JScrollPane c))
     (.addMouseListener
       c (proxy-mouse-listener-click (:app-ref ctx) click-handler))
@@ -348,18 +334,16 @@
    :text                   (fn set-text [c ctx text]
                              #_(.printStackTrace (Exception. "stack trace"))
                              (let [old-text (.getText c)]
-                               (log/info (str "new-text = \"" text "\" old-text = \"" old-text "\""))
-                               (log/info (str "new-text nil? " (nil? text) " old-text nil? " (nil? old-text)))
                                (when (text-changed? old-text text)
                                  (.setText c text))))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
    ; TODO: if action not in on-close-action-map, then add it as a WindowListener to the close event
-   :on-close               (fn on-close [c ctx action] (.setDefaultCloseOperation c (on-close-action-map action)))
+   :on-close               (fn on-close [c ctx action]
+                             (.setDefaultCloseOperation c (on-close-action-map action)))
    :layout-constraints     (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    :row-constraints        (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints     (fn set-column-constraints [c ctx constraints]
-                             (log/info "setting column constraints to " constraints)
                              (.setColumnConstraints c constraints))
    ; Combo Box attr appliers
    :combo-box-data         set-combo-box-data
@@ -389,10 +373,8 @@
 
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
    :on-action              (fn on-action [c ctx action-handler]
-                             (log/info "registering action listener for component: " c)
                              #_(if (instance? JCheckBox c) (action-handler (:app-ref ctx) nil))
                              (doseq [al (vec (.getActionListeners c))]
-                               (log/info "removing action listener" al " for " c)
                                (.removeActionListener c al))
                              (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
                                                                             (action-handler (:app-ref ctx) action-event)))))

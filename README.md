@@ -186,3 +186,21 @@ and id each time and therefore Retroact will see it as a different fn. Retroact 
 the new one even if the actual code inside is identical.
 
 In some cases the attribute may not properly remove the previous fn, though this would be considered a bug.
+
+
+# Internals
+
+When the app-ref (application state) changes, Retroact has a watch on that
+ref, which responds by updating the view. The watch does so by enqueueing
+a request to update the view on a channel specific to the app-ref. The chan
+has a sliding buffer so that only the latest update is performed. Since the
+view is a function of the state it does not matter what the previous value
+of the state was, only the current value matters.
+
+The old value from the watch is not transmitted to the update view code
+because it may have no relevance since the 1 element sliding buffer of the
+app-ref's chan will discard some values of app-ref before they ever get
+rendered. Therefor, the value of app-ref, or more importantly the rendered
+view, is saved with the onscreen component. This can then be retrieved as the
+old value of the rendered view for comparison to see what has changed from
+one view rendering to the next.

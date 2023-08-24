@@ -10,7 +10,7 @@
   (:import (java.awt CardLayout Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener MouseAdapter)
            (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree SwingUtilities)
-           (javax.swing.event DocumentListener ListSelectionListener TreeSelectionListener)
+           (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (net.miginfocom.swing MigLayout)))
 
 
@@ -68,6 +68,12 @@
   (reify ActionListener
     (actionPerformed [this action-event]
       (action-handler action-event))))
+
+(defn reify-change-listener
+  [change-handler]
+  (reify ChangeListener
+    (stateChanged [this change-event]
+      (change-handler change-event))))
 
 (defn proxy-mouse-listener-click [app-ref click-handler]
   (proxy [MouseAdapter] []
@@ -214,6 +220,11 @@
         (and (nil? old-text) (empty? new-text))
         (and (empty? old-text) (nil? new-text)))))
 
+(defn show-card
+  "Shows card of container c when CardLayout is being used."
+  [c ctx card-name]
+  (.show (.getLayout c) c card-name))
+
 (defn set-combo-box-data
   [c ctx data]
   (let [model (.getModel c)]
@@ -270,6 +281,9 @@
            (if (and start end)
             (.setRowSelectionInterval c start end)
             (.clearSelection c)))))))
+
+(defn on-change [c ctx change-handler]
+  (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))
 
 (defmulti on-selection-change (fn [c _ _] (class c)))
 
@@ -343,7 +357,8 @@
    :row-selection-interval set-row-selection-interval
    :selected               (fn set-selected [c ctx selected?]
                              (.setSelected c selected?))
-   :selected-index         (fn set-selected-index [c ctx index] (.setSelectedIndex c index))
+   :selected-index         {:deps [:contents]
+                            :fn (fn set-selected-index [c ctx index] (.setSelectedIndex c index))}
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
    :text                   (fn set-text [c ctx text]
                              #_(.printStackTrace (Exception. "stack trace"))
@@ -359,6 +374,9 @@
    :row-constraints        (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints     (fn set-column-constraints [c ctx constraints]
                              (.setColumnConstraints c constraints))
+   ; Card Layout
+   :show-card              {:deps [:layout :contents]
+                            :fn   show-card}
    ; Combo Box attr appliers
    :combo-box-data         set-combo-box-data
    :selected-item          (fn set-selected-item [c ctx item] (.setSelectedItem c item))
@@ -394,6 +412,7 @@
                                (.removeActionListener c al))
                              (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
                                                                             (action-handler (:app-ref ctx) action-event)))))
+   :on-change              on-change
    :on-selection-change    on-selection-change
    :on-text-change         (fn on-text-change [c ctx text-change-handler]
                              #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
@@ -412,15 +431,16 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents               {:get-existing-children get-existing-children
+   :contents               {:deps [:layout]
+                            :get-existing-children get-existing-children
                             :add-new-child-at      add-new-child-at
                             :remove-child-at       remove-child-at
                             :get-child-at          get-child-at}
    })
 
 (def toolkit-config
-  {:attr-appliers `attr-appliers
-   :assoc-view `assoc-view
+  {:attr-appliers             `attr-appliers
+   :assoc-view                `assoc-view
    :redraw-onscreen-component `redraw-onscreen-component
-   :class-map `class-map
-   :run-on-toolkit-thread `run-on-toolkit-thread})
+   :class-map                 `class-map
+   :run-on-toolkit-thread     `run-on-toolkit-thread})

@@ -162,6 +162,25 @@
         (run-on-toolkit-thread ctx remove-child-at component index)))
     (redraw-onscreen-component ctx component)))
 
+(defn- get-sorted-attribute-keys
+  [attr-appliers view]
+  (loop [unsorted-attrs (set (keys view)) sorted-attrs []]
+    (let [ready-attrs (filter (fn dependencies-met [attr]
+                                (let [deps (get-in attr-appliers [attr :deps])]
+                                  (or (not deps)
+                                      (not (some unsorted-attrs deps)))))
+                              unsorted-attrs)]
+      (log/info "sorting attr: unsorted: " unsorted-attrs ", sorted: " sorted-attrs ", ready: " ready-attrs)
+      (if (not-empty ready-attrs)
+        (recur (apply disj unsorted-attrs ready-attrs) (into sorted-attrs ready-attrs))
+        (if (not-empty unsorted-attrs)
+          (do (log/warn "could not order attribute appliers. Circular dependence found. Returning all appliers anyway.")
+              (into sorted-attrs unsorted-attrs))
+          sorted-attrs)))))
+
+(defn- get-applier-fn [attr-applier]
+  (or (:fn attr-applier) attr-applier))
+
 (defn apply-attributes
   [{:keys [onscreen-component app-val old-view new-view] :as ctx}]
   #_(log/info "applying attributes" (:class new-view) "log msg3")
@@ -169,8 +188,9 @@
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (let [final-attr-appliers (merge (get-in-toolkit-config ctx :attr-appliers)
                                      (get-in app-val [:retroact :attr-appliers]))]
-      (doseq [attr (set (keys new-view))]
+      (doseq [attr (get-sorted-attribute-keys final-attr-appliers new-view)]
         (when-let [attr-applier (get final-attr-appliers attr)]
+          (log/info "handling attr:" attr)
           (cond
             ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
             ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
@@ -183,7 +203,7 @@
                     ; TODO: check if attr is a map for a component and apply attributes to it before calling this
                     ; attr-applier, then pass the result to this attr-applier.
                     #_(log/info "applying attribute" attr)
-                    (run-on-toolkit-thread ctx attr-applier onscreen-component
+                    (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
                                            (assoc ctx :attr attr)
                                            (get new-view attr)))))))
     (assoc-view ctx onscreen-component new-view))

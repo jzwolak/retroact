@@ -8,7 +8,8 @@
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (java.awt CardLayout Color Component Container Dimension BorderLayout)
-           (java.awt.event ActionListener MouseAdapter)
+           (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter)
+           (java.beans PropertyChangeListener)
            (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (net.miginfocom.swing MigLayout)))
@@ -74,6 +75,18 @@
   (reify ChangeListener
     (stateChanged [this change-event]
       (change-handler change-event))))
+
+(defn reify-component-resize-listener
+  [component-resize-handler]
+  (proxy [ComponentAdapter] []
+    (componentResized [component-event]
+      (component-resize-handler component-event))))
+
+(defn reify-property-change-listener
+  [property-change-handler]
+  (reify PropertyChangeListener
+    (propertyChange [this property-change-event]
+      (property-change-handler property-change-event))))
 
 (defn proxy-mouse-listener-click [app-ref click-handler]
   (proxy [MouseAdapter] []
@@ -285,6 +298,12 @@
 (defn on-change [c ctx change-handler]
   (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))
 
+(defn on-component-resize [c ctx component-resize-handler]
+  (.addComponentListener c (reify-component-resize-listener (fn [ce] (component-resize-handler ctx ce)))))
+
+(defn on-property-change [c ctx property-change-handler]
+  (.addPropertyChangeListener c (reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
+
 (defmulti on-selection-change (fn [c _ _] (class c)))
 
 (defmethod on-selection-change JComboBox [c ctx selection-change-handler]
@@ -391,7 +410,11 @@
                             :get (fn get-bottom-comp [c ctx] (.getBottomComponent c))}
    :one-touch-expandable   (fn set-one-touch-expandable [c ctx expandable] (.setOneTouchExpandable c expandable))
    :orientation            (fn set-orientation [c ctx orientation] (.setOrientation c (orientation-map orientation)))
-   :divider-location       (fn set-divider-location [c ctx location] (.setDividerLocation c ^Integer location))
+   :divider-location       (fn set-divider-location [c ctx location]
+                             (.setDividerLocation c ^int location))
+   ; careful with this one, it only works _after_ the component has a size... that is, rendered on screen.
+   :divider-location-ratio (fn set-divider-location [c ctx location]
+                             (.setDividerLocation c ^double location))
    ; Tabbed Pane attr appliers
    :tab-title              set-tab-title
    ; Table attr appliers
@@ -413,6 +436,8 @@
                              (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
                                                                             (action-handler (:app-ref ctx) action-event)))))
    :on-change              on-change
+   :on-component-resize    on-component-resize
+   :on-property-change     on-property-change
    :on-selection-change    on-selection-change
    :on-text-change         (fn on-text-change [c ctx text-change-handler]
                              #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
@@ -431,7 +456,7 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents               {:deps [:layout]
+   :contents               {:deps                  [:layout]
                             :get-existing-children get-existing-children
                             :add-new-child-at      add-new-child-at
                             :remove-child-at       remove-child-at

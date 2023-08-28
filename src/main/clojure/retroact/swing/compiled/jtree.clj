@@ -5,9 +5,11 @@
            (javax.swing.event TreeModelEvent)
            (javax.swing.tree TreePath)))
 
-; :data - the data supplied and used to generate the tree
-; :tree - the result of calling :tree-model-fn on data. This should have a tree structure.
-; :tree-model-fn - ??
+; :data - the data supplied and used to generate the tree, this is raw data that can be quickly queried from the domain
+;         model
+; :tree - the result of calling :tree-model-fn on data. This should have a tree structure and may take a while to
+;         calculate.
+; :tree-model-fn - calculates :tree from :data and takes :tree-root and :data as its arguments.
 ; :tree-render-fn takes a node in the :tree and turns it into something that can be displayed. A String will do.
 (gen-class
   :name "retroact.swing.compiled.jtree.RTreeModel"
@@ -38,7 +40,9 @@
       (let [tree-model-event (TreeModelEvent. this (object-array [(:tree-root new-value)]))]
         (doseq [listener listeners]
           (SwingUtilities/invokeLater
-            #(.treeStructureChanged listener tree-model-event)))))))
+            (fn []
+              (log/info "firing tree structure changed")
+              (.treeStructureChanged listener tree-model-event))))))))
 
 (defn rtree-model-init-state []
   (let [tree-root (str (UUID/randomUUID))
@@ -133,6 +137,11 @@
   [this render-fn]
   (swap! (.state this) assoc :tree-render-fn render-fn))
 
+(defn- set-icon [cell-renderer icon]
+  (.setClosedIcon cell-renderer icon)
+  (.setOpenIcon cell-renderer icon)
+  (.setLeafIcon cell-renderer icon))
+
 (defn rtree-cell-renderer-getTreeCellRendererComponent
   [this tree value selected expanded leaf row has-focus]
   (let [tree-render-fn (:tree-render-fn @(.state (.getModel tree)))
@@ -142,9 +151,8 @@
       (.superGetTreeCellRendererComponent this tree rendered-value selected expanded leaf row has-focus)
       (map? rendered-value)
       (do
-          (when (contains? rendered-value :icon)
-            (.setClosedIcon this (:icon rendered-value))
-            (.setOpenIcon this (:icon rendered-value))
-            (.setLeafIcon this (:icon rendered-value)))
+          (if (contains? rendered-value :icon)
+            (set-icon this (:icon rendered-value))
+            (set-icon this nil))
           (.superGetTreeCellRendererComponent this tree (:value rendered-value) selected expanded leaf row has-focus))
       )))

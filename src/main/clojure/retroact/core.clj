@@ -64,12 +64,12 @@
     (<!! result-chan)))
 
 (defn redraw-onscreen-component [ctx component]
-  (let [tk-redraw-onscreen-component (get-in ctx [:app-val :retroact :toolkit-config :redraw-onscreen-component])]
-    (run-on-toolkit-thread ctx #(tk-redraw-onscreen-component component))))
+  (let [tk-redraw-onscreen-component (get-in-toolkit-config ctx :redraw-onscreen-component)]
+    (run-on-toolkit-thread ctx tk-redraw-onscreen-component component)))
 
 (defn assoc-view [ctx onscreen-component view]
-  (let [tk-assoc-view (get-in ctx [:app-val :retroact :toolkit-config :assoc-view])]
-    (run-on-toolkit-thread ctx #(tk-assoc-view onscreen-component view))))
+  (let [tk-assoc-view (get-in-toolkit-config ctx :assoc-view)]
+    (run-on-toolkit-thread ctx tk-assoc-view onscreen-component view)))
 
 
 (defn component-applier? [attr-applier]
@@ -170,7 +170,6 @@
                                   (or (not deps)
                                       (not (some unsorted-attrs deps)))))
                               unsorted-attrs)]
-      (log/info "sorting attr: unsorted: " unsorted-attrs ", sorted: " sorted-attrs ", ready: " ready-attrs)
       (if (not-empty ready-attrs)
         (recur (apply disj unsorted-attrs ready-attrs) (into sorted-attrs ready-attrs))
         (if (not-empty unsorted-attrs)
@@ -190,7 +189,6 @@
                                      (get-in app-val [:retroact :attr-appliers]))]
       (doseq [attr (get-sorted-attribute-keys final-attr-appliers new-view)]
         (when-let [attr-applier (get final-attr-appliers attr)]
-          (log/info "handling attr:" attr)
           (cond
             ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
             ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help

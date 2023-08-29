@@ -3,7 +3,8 @@
             [clojure.set :refer [difference]]
             [clojure.tools.logging :as log]
             [retroact.swing :as swing])
-  (:import (clojure.lang Agent Atom Ref)))
+  (:import (clojure.lang Agent Atom Ref)
+           (java.lang.ref WeakReference)))
 
 ; Open questions:
 ;
@@ -45,11 +46,14 @@
 ; TODO: destroy or remove components should remove side-effect fn from app-ref meta and remove component from main
 ; retroact loop.
 
-(defonce app-refs (atom []))
+(defonce retroact-state (atom {:app-refs []
+                               :id->comp {}}))
 
 (declare build-ui)
 (declare update-component)
 (declare retroact-cmd-chan)
+
+(declare retroact-attr-appliers)
 
 (defn get-in-toolkit-config [ctx k]
   @(resolve (get-in ctx [:app-val :retroact :toolkit-config k])))
@@ -186,7 +190,8 @@
   #_(log/info "onscreen-component class =" (class onscreen-component))
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (let [final-attr-appliers (merge (get-in-toolkit-config ctx :attr-appliers)
-                                     (get-in app-val [:retroact :attr-appliers]))]
+                                     (get-in app-val [:retroact :attr-appliers])
+                                     retroact-attr-appliers)]
       (doseq [attr (get-sorted-attribute-keys final-attr-appliers new-view)]
         (when-let [attr-applier (get final-attr-appliers attr)]
           (cond
@@ -382,6 +387,33 @@
     ; To do that, I can just add another command: :add-component
     {} components))
 
+(defn- clear-weak-refs-and-add-id->comp [state id comp]
+  (assoc state :id->comp
+               (assoc
+                 (into {} (filter (fn [[_ wr]] (.get wr)) (:id->comp state)))
+                 id (WeakReference. comp))))
+
+(defn- register-component-with-id
+  [onscreen-component ctx id]
+  (log/info "registering component with id" id onscreen-component)
+  (swap! retroact-state clear-weak-refs-and-add-id->comp id onscreen-component)
+  (log/info "retroact-state =" (:id->comp @retroact-state)))
+
+(def retroact-attr-appliers
+  {:id register-component-with-id})
+
+(defn get-comp [id]
+  (log/info "getting comp with id" id)
+  (let [weak-ref (get-in @retroact-state [:id->comp id])]
+    (if weak-ref
+      (do
+        (log/info "got weak-ref:" weak-ref)
+        (log/info "got comp:" (.get weak-ref))
+        (.get weak-ref))
+      (do
+        (log/info "weak-ref is nil? " weak-ref))
+      )))
+
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
   (loop [chans [retroact-cmd-chan]
@@ -529,7 +561,7 @@
      (alter-meta! app-ref assoc :retroact {:update-view-chan update-view-chan})
      (alter-app-ref! app-ref assoc-in [:retroact :toolkit-config] swing/toolkit-config)
      (go (>! @retroact-cmd-chan [:update-view-chan update-view-chan]))
-     (swap! app-refs conj app-ref)
+     (swap! retroact-state update-in [:app-refs] conj app-ref)
      ; no need to start thread here... it automatically starts when the retroact-cmd-chan is used.
      (add-watch app-ref :retroact-watch app-watch)
      #_(binding [*print-meta* true]

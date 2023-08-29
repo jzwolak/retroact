@@ -7,12 +7,27 @@
                                           set-tree-toggle-click-count]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
-  (:import (java.awt CardLayout Color Component Container Dimension BorderLayout)
+  (:import (clojure.lang ArityException)
+           (java.awt CardLayout Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (net.miginfocom.swing MigLayout)))
+
+
+; TODO: I need to decide a regular way to pass arguments to handler fns. Currently I sometimes pass ctx, sometimes
+; app-ref, sometimes the event, sometimes the data that is expected (like the text if it's a text change event), and
+; almost always some combination of the above.
+; I'm not sure the ctx is really necessary and it certainly would be outdated at the time the event actually executes.
+; So perhaps app-ref, the event, and then optionally any data. The component that is the source of the event should
+; always be obtainable by the event object, but if not, then I want to include that, too. The view should be on the
+; component. Perhaps I can create a helper that quickly gets that - like (get-view (.getSource event)).
+; Perhaps the rule of thumb should be to get things that are hard to get and not bother with things that are easy.
+;
+; Sometimes the event does not have a .getSource method. So pass the component to.
+; Maybe use these as args:
+;   app-ref component event optional-data
 
 
 (def client-prop-prefix "retroact-")
@@ -329,6 +344,19 @@
 (defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
   (on-selection-change (.getView (.getViewport c)) ctx selection-change-handler))
 
+(defn on-text-change [c ctx text-change-handler]
+  #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
+      (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
+  (.addDocumentListener (.getDocument c)
+                        (reify-document-listener-to-text-change-listener
+                          (fn text-change-handler-clojure [doc-event]
+                            (try
+                              (text-change-handler (:app-ref ctx) c doc-event (.getText c))
+                              (catch ArityException ae
+                                (log/warn "two arg version of :on-text-change handler deprecated, please update to"
+                                          "four args with the component and doc-event as the second and third args")
+                                (text-change-handler (:app-ref ctx) (.getText c))))))))
+
 (defn on-set-value-at
   "The set-value-at-handler has args [app-ref old-item new-value row col] where row and col are the row and column of
    the table where the user performed an edit on a the cell at row and column, old-item is the item represented at that
@@ -439,13 +467,7 @@
    :on-component-resize    on-component-resize
    :on-property-change     on-property-change
    :on-selection-change    on-selection-change
-   :on-text-change         (fn on-text-change [c ctx text-change-handler]
-                             #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
-                                 (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
-                             (.addDocumentListener (.getDocument c)
-                                                   (reify-document-listener-to-text-change-listener
-                                                     (fn text-change-handler-clojure [doc-event]
-                                                       (text-change-handler (:app-ref ctx) (.getText c))))))
+   :on-text-change         on-text-change
    :on-set-value-at        on-set-value-at
    ; Mouse listeners
    :on-click               on-click

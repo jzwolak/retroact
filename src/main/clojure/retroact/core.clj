@@ -1,10 +1,15 @@
 (ns retroact.core
   (:require [clojure.core.async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
-            [clojure.set :refer [difference]]
+            [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
             [retroact.swing :as swing])
   (:import (clojure.lang Agent Atom Ref)
            (java.lang.ref WeakReference)))
+
+; TODO: add ability to register exception handler. Wrap all calls to component-did-mount and component-did-update with
+; try-catch and call registered exception handlers. Wrap outer loop of retroact main loop in try catch to add a fail
+; safe. Call registered exception handlers if it fails with extra warning about possible problem in Retroact, but at
+; least the main loop will continue.
 
 ; Open questions:
 ;
@@ -46,6 +51,8 @@
 ; TODO: destroy or remove components should remove side-effect fn from app-ref meta and remove component from main
 ; retroact loop.
 
+; TODO: remove this state and use only the state within the Retroact main loop. Use queries to asynchronously get state
+; from the main loop.
 (defonce retroact-state (atom {:app-refs []
                                :id->comp {}}))
 
@@ -55,12 +62,23 @@
 
 (declare retroact-attr-appliers)
 
+(defn- capture-stack [f]
+  (let [prison (Exception. "prison exception, should never be thrown")]
+    (fn [& args]
+      (try
+        (apply f args)
+        (catch Exception cause
+          (let [rex (RuntimeException. "captured stack" cause)]
+            (.setStackTrace rex (.getStackTrace prison))
+            (throw rex)))))))
+
 (defn get-in-toolkit-config [ctx k]
   @(resolve (get-in ctx [:app-val :retroact :toolkit-config k])))
 
 (defn run-on-toolkit-thread [ctx f & args]
-  (let [tk-run-on-toolkit-thread (get-in-toolkit-config ctx :run-on-toolkit-thread)]
-    (tk-run-on-toolkit-thread #(apply f args))))
+  (let [tk-run-on-toolkit-thread (get-in-toolkit-config ctx :run-on-toolkit-thread)
+        f-in-stack-prison (capture-stack f)]
+    (apply tk-run-on-toolkit-thread f-in-stack-prison args)))
 
 (defn run-on-toolkit-thread-with-result [ctx f & args]
   (let [result-chan (chan 1)]
@@ -136,8 +154,9 @@
   (run-on-toolkit-thread ctx remove-child-at component index)
   (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index))
 
-(defn- apply-children-applier
+(defn- apply-children-applier-fallback
   [attr-applier component ctx attr old-view new-view]
+  (log/warn "using fallback children applier. Try setting :id on all children for better performance and robustness.")
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
         remove-child-at (:remove-child-at attr-applier)
@@ -154,21 +173,57 @@
       #_(log/info "child index" index "| old-child =" old-child "log msg1")
       #_(log/info "child index" index "| new-child =" new-child "log msg2")
       (cond
-        (nil? old-child) (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index)
-        (not= (:class old-child) (:class new-child)) (replace-child-at ctx remove-child-at add-new-child-at component new-child index)
-        (and old-child new-child) (apply-attributes
-                                    (assoc ctx
-                                      :onscreen-component (run-on-toolkit-thread-with-result ctx get-child-at component index)
-                                      :old-view old-child :new-view new-child))))
+        (nil? old-child) (do
+                           (log/info "adding child at" index "for component" component)
+                           (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index))
+        (not= (:class old-child) (:class new-child)) (do
+                                                       (log/info "replacing child at" index "for component" component)
+                                                       (replace-child-at ctx remove-child-at add-new-child-at component new-child index))
+        (and old-child new-child) (do
+                                    (log/info "updating child at" index "for component" component)
+                                    (apply-attributes
+                                        (assoc ctx
+                                          :onscreen-component (run-on-toolkit-thread-with-result ctx get-child-at component index)
+                                          :old-view old-child :new-view new-child)))))
     (when (> (count old-children) (count new-children))
       (doseq [index (range (dec (count old-children)) (dec (count new-children)) -1)]
-        #_(log/info "removing child at" index "for" (:class new-view))
+        (log/info "removing child at" index "for" (:class new-view))
         (run-on-toolkit-thread ctx remove-child-at component index)))
     (redraw-onscreen-component ctx component)))
 
+(defn- create-child-id->index [view attr]
+  (into {} (map (fn [child index] [(:id child) index]) (get view attr) (range))))
+
+(defn calculate-gcs [old-view new-view attr]
+  (loop [old-children (get old-view attr)
+         new-children (get new-view attr)
+         gcs-matrix []]
+    ))
+
+(defn- apply-children-applier-with-ids
+  [attr-applier component ctx attr old-view new-view]
+  (throw (RuntimeException. "children not updated!!"))
+  #_(let [old-child-id->index (create-child-id->index old-view attr)
+        new-child-id->index (create-child-id->index new-view attr)
+        conserved-child-ids (union (set (keys new-child-id->index)) (set (keys old-child-id->index)))
+        first-old-child-id (first (apply min-key second (select-keys old-child-id->index conserved-child-ids)))
+        first-new-child-id (first (apply min-key second (select-keys new-child-id->index conserved-child-ids)))
+        ]
+    ))
+
+(defn- apply-children-applier
+  "If all children in old-view and new-view have an :id then use those :id's to determine identity and rearrange,
+   remove, and add new components to make new-view. If any component is missing :id then give a warning and return
+   false. The fallback applier will then be used."
+  [attr-applier component ctx attr old-view new-view]
+  ; TODO: remove the not-empty check. That's there to force use of the fallback until the main apply-children-applier-with-ids is implemented.
+  (if (and (every? :id (get old-view attr)) (every? :id (get new-view attr)) (not-empty (get new-view attr)))
+    (apply-children-applier-with-ids attr-applier component ctx attr old-view new-view)
+    (apply-children-applier-fallback attr-applier component ctx attr old-view new-view)))
+
 (defn- get-sorted-attribute-keys
-  [attr-appliers view]
-  (loop [unsorted-attrs (set (keys view)) sorted-attrs []]
+  [attr-appliers attr-keys]
+  (loop [unsorted-attrs (set attr-keys) sorted-attrs []]
     (let [ready-attrs (filter (fn dependencies-met [attr]
                                 (let [deps (get-in attr-appliers [attr :deps])]
                                   (or (not deps)
@@ -179,36 +234,52 @@
         (if (not-empty unsorted-attrs)
           (do (log/warn "could not order attribute appliers. Circular dependence found. Returning all appliers anyway.")
               (into sorted-attrs unsorted-attrs))
-          sorted-attrs)))))
+          (do
+            (log/info "sorted-attrs:" sorted-attrs)
+            sorted-attrs))))))
+
+(defn- default-applier-fn [c ctx v])
 
 (defn- get-applier-fn [attr-applier]
-  (or (:fn attr-applier) attr-applier))
+  (let [applier-fn (or (:fn attr-applier) attr-applier)]
+    (if (fn? applier-fn)
+      applier-fn
+      default-applier-fn)))
 
 (defn apply-attributes
-  [{:keys [onscreen-component app-val old-view new-view] :as ctx}]
+  "Takes the diff of the old-view and new-view and applies only the changes to the onscreen component. The old-view is
+  the one from the previous @app-ref render call. It is _not_ the one stored in the component. When children components
+  are being used it's impossible to tell if the child component is associated with the previous old-view or not and
+  some appliers work on the parent and not the component itself. For instance the :tab-title and :tab-tooltip for
+  Swing's JTabbedPane. Those attributes occur on the children but make changes to the parent. If a child is removed
+  then the parent (JTabbedPane in this case) may need updates based on the children sliding into place. That is, the
+  child at 2 may become the child at 1 if the child at 0 is removed. The child at 1 then needs all its attributes
+  updated to look like what should be rendered at spot 1. The component is reused. Avoid this by using :id on the
+  rendered results."
+  [{:keys [onscreen-component app-val old-view new-view attr-appliers] :as ctx}]
   #_(log/info "applying attributes" (:class new-view) "log msg3")
   #_(log/info "onscreen-component class =" (class onscreen-component))
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
-    (let [final-attr-appliers (merge (get-in-toolkit-config ctx :attr-appliers)
-                                     (get-in app-val [:retroact :attr-appliers])
-                                     retroact-attr-appliers)]
-      (doseq [attr (get-sorted-attribute-keys final-attr-appliers new-view)]
-        (when-let [attr-applier (get final-attr-appliers attr)]
-          (cond
-            ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
-            ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
-            ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
-            ; to be moved to apply-attributes or recursive itself.
-            (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
-            (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
-            ; Assume attr-applier is a fn and call it on the component.
-            :else (when (not (= (get old-view attr) (get new-view attr)))
-                    ; TODO: check if attr is a map for a component and apply attributes to it before calling this
-                    ; attr-applier, then pass the result to this attr-applier.
-                    #_(log/info "applying attribute" attr)
-                    (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
-                                           (assoc ctx :attr attr)
-                                           (get new-view attr)))))))
+    ; Use old-view and new-view to get attribute keys because a key may be removed and that will be treated like
+    ; setting the value to nil (or false).
+    (doseq [attr (get-sorted-attribute-keys attr-appliers (concat (keys old-view) (keys new-view)))]
+      (when-let [attr-applier (get attr-appliers attr)]
+        (cond
+          ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
+          ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
+          ; since apply-children-applier iterates over a sequence and calls apply-attributes. That iteration would have
+          ; to be moved to apply-attributes or recursive itself.
+          (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
+          (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
+          ; Assume attr-applier is a fn and call it on the component.
+          :else (when (or (not (= (get old-view attr) (get new-view attr)))
+                          (not (= (contains? old-view attr) (contains? new-view attr))))
+                  ; TODO: check if attr is a map for a component and apply attributes to it before calling this
+                  ; attr-applier, then pass the result to this attr-applier.
+                  #_(log/info "applying attribute" attr)
+                  (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
+                                         (assoc ctx :attr attr)
+                                         (get new-view attr))))))
     (assoc-view ctx onscreen-component new-view))
   onscreen-component)
 
@@ -333,8 +404,25 @@
 ; listening on to get commands from the app. How cool is that! Perhaps I call it "main-chan" instead of
 ; "start-main-loop" then.
 
-(defn- update-onscreen-component [{:keys [app-ref onscreen-component old-view new-view] :as ctx}]
-  (let [onscreen-component (or onscreen-component (instantiate-class ctx new-view))]
+(defn- recreate-attrs-changed? [onscreen-component attr-appliers old-view new-view]
+  (let [new-attrs (keys new-view)]
+    (some (fn [attr]
+            (let [recreate-classes (get-in attr-appliers [attr :recreate] [])]
+              (some (fn [klass] (and (instance? klass onscreen-component) (not= (get old-view attr) (get new-view attr))))
+                    recreate-classes)))
+          new-attrs)))
+
+(defn- onscreen-component-reusable? [{:keys [attr-appliers] :as ctx} onscreen-component old-view new-view]
+  (cond
+    (nil? onscreen-component) false
+    (not= (:class old-view) (:class new-view)) false
+    (recreate-attrs-changed? onscreen-component attr-appliers old-view new-view) false
+    :else true))
+
+(defn- update-onscreen-component [{:keys [onscreen-component old-view new-view] :as ctx}]
+  (let [reusable (onscreen-component-reusable? ctx onscreen-component old-view new-view)
+        onscreen-component (if reusable onscreen-component (instantiate-class ctx new-view))
+        ctx (if reusable ctx (dissoc ctx :old-view))]
     (apply-attributes (assoc ctx :onscreen-component onscreen-component))
     onscreen-component))
 
@@ -344,6 +432,17 @@
 
 (defn- is-component? [v]
   (and (map? v) (contains? v :render)))
+
+(defn- run-lifecycle-fn [ctx comp fn-key]
+  (when-let [lifecycle-fn (get comp fn-key)]
+    (when (fn? lifecycle-fn)
+      (try (lifecycle-fn (:onscreen-component comp) (:app-ref ctx) (:app-val ctx))
+           (catch Exception ex
+             (log/error ex "exception thrown while running" fn-key))))))
+
+(defn- run-component-did-update [ctx comp] (run-lifecycle-fn ctx comp :component-did-update))
+(defn- run-component-did-remount [ctx comp] (run-lifecycle-fn ctx comp :component-did-remount))
+(defn- run-component-did-mount [ctx comp] (run-lifecycle-fn ctx comp :component-did-mount))
 
 (defn- update-component
   "Update onscreen-component, create it if necessary, and return the new view and updated onscreen-component."
@@ -360,23 +459,19 @@
             (assoc ctx
               :onscreen-component onscreen-component
               :old-view view :new-view new-view))
-          onscreen-component)]
+          onscreen-component)
+        updated-comp (assoc comp :view new-view :onscreen-component updated-onscreen-component)]
     (when (and (nil? onscreen-component) (not (nil? updated-onscreen-component)))
-      (let [component-did-mount (get comp :component-did-mount (fn default-component-did-mount [comp app-ref new-value]))]
-          (component-did-mount updated-onscreen-component app-ref app-val)))
+      (run-component-did-mount ctx updated-comp))
+    (when (and onscreen-component updated-onscreen-component)
+      (run-component-did-update ctx updated-comp))
     (assoc comp :view new-view :onscreen-component updated-onscreen-component)))
 
 (defn- update-components [ctx components]
-  ; app has a value for components, but components contains the component data matching the onscreen-components. So we
-  ; use it.
+  ; app has a value for components representing the retroact views of the components, but components contains the
+  ; component objects matching the onscreen-components. So we use it.
   (reduce-kv
     (fn render-onscreen-comp [m comp-id comp]
-      #_(log/info "update-components comp =" comp "log msg6") ; This can be a lot of data.
-      ; TODO: change this to update-component instead of update-onscreen-component and have it update the new-view, too.
-      ; The update to the new-view will modify the result of the render fn with substitutions for objects.
-      ; So I did add update-component, but now I need to go into that fn and update new-view... but that isn't exactly
-      ; what I initially intended. I wanted to change the name of update-onscreen-component and have it update new-view,
-      ; too.
       (assoc m comp-id (update-component ctx comp)))
     ; This is the only reference to components in app. All other references to components is the local components to
     ; the retroact-main-loop. It's here because there may be multiple apps running and the main loop services them all.
@@ -388,10 +483,9 @@
     {} components))
 
 (defn- clear-weak-refs-and-add-id->comp [state id comp]
-  (assoc state :id->comp
-               (assoc
-                 (into {} (filter (fn [[_ wr]] (.get wr)) (:id->comp state)))
-                 id (WeakReference. comp))))
+  (let [ids-for-destroyed-comps (map first (filter (fn [[_ wr]] (nil? (.get wr))) (:id->comp state)))
+        id->comp (apply dissoc (:id->comp state) ids-for-destroyed-comps)]
+    (assoc state :id->comp (assoc id->comp id (WeakReference. comp)))))
 
 (defn- register-component-with-id
   [onscreen-component ctx id]
@@ -414,6 +508,18 @@
         (log/info "weak-ref is nil? " weak-ref))
       )))
 
+(defn- debug-output-components [app-ref->components]
+  (doseq [[app-ref components] app-ref->components]
+    (doseq [[comp-id component] components]
+      (log/info comp-id "->" (:onscreen-component component)))))
+
+(defn- create-ctx [app-ref app-val]
+  (let [ctx {:app-ref app-ref :app-val app-val}
+        ctx (assoc ctx :attr-appliers (merge (get-in-toolkit-config ctx :attr-appliers)
+                                             (get-in app-val [:retroact :attr-appliers])
+                                             retroact-attr-appliers))]
+    ctx))
+
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
   (loop [chans [retroact-cmd-chan]
@@ -426,7 +532,7 @@
         ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
         ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
         :update-view (let [[_ app-ref app-val] val
-                           ctx {:app-ref app-ref :app-val app-val}
+                           ctx (create-ctx app-ref app-val)
                            components (get app-ref->components app-ref {})
                            next-components (update-components ctx components)
                            next-app-ref->components (assoc app-ref->components app-ref next-components)]
@@ -449,11 +555,17 @@
                        (recur chans next-app-ref->components))
         :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) app-ref->components))
         :add-component (let [{:keys [component app-ref app-val]} (second val)
-                             ctx {:app-ref app-ref :app-val app-val}
+                             ctx (create-ctx app-ref app-val)
                              components (get app-ref->components app-ref {})
                              comp-id (:comp-id component)
+                             component-exists (contains? components comp-id)
+                             component (if component-exists
+                                         (merge (get components comp-id) component)
+                                         component)
                              next-component (update-component ctx component)
                              next-components (assoc components comp-id next-component)]
+                         (when (and component-exists (:onscreen-component next-component))
+                           (run-component-did-remount ctx next-component))
                          (recur chans (assoc app-ref->components app-ref next-components)))
         :remove-component (let [{:keys [comp-id app-ref]} (second val)
                                 next-components (dissoc (get app-ref->components app-ref) comp-id)
@@ -462,6 +574,8 @@
         :call-fn (let [[_ f args] val]
                      (apply f args)
                      (recur chans app-ref->components))
+        :debug-output-components (do (debug-output-components app-ref->components)
+                                     (recur chans app-ref->components))
         :shutdown (do)                                      ; do nothing, will not recur
         (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)
             (recur chans app-ref->components)))
@@ -517,15 +631,24 @@
    mount components in an existing non-Retroact component can use this to construct such \"detached\" components, which
    are essentially top level components as far as Retroact is concerned but not in the native windowing system. Note,
    the onscreen-component is built asynchronously and may be added to the legacy component in its component-did-mount
-   or ... TODO: in the future there may be another way to do this."
+   or ... TODO: in the future there may be another way to do this.
+
+   If :comp-id exists in comp then an existing top level component will be reused if one exists matching the supplied
+   value of :comp-id."
   ([app-ref comp props]
    (let [constructor (get comp :constructor (fn default-constructor [props state] state))
-         comp-id (keyword (gensym "comp"))
+         ; TODO: use the component id provided by the user in the view (:id) if one exists. If the user specifies an
+         ; :id that is already being used then consider it the same component and either update the existing component
+         ; or throw an error. I need to decide which is better.
+         comp-id (get comp :comp-id (keyword (gensym "comp")))
          ; Add a unique id to ensure component map is unique. Side effects by duplicate components should
          ; generate duplicate onscreen components and we need to be sure the data here is unique. Onscreen
          ; components store Java reference in comp, but it won't be here immediately.
          comp (assoc comp :comp-id comp-id)]
      ; No need to render comp view here because this will trigger the watch, which will render the view.
+     ; Not sure that previous statement is accurate. The watch will get triggered, but this new component isn't yet
+     ; in the list of registered components to be rendered. So it doesn't get rendered until run-cmd :add-component
+     ; executes, which has its own call to update-component, which in turn renders the view.
      (let [app
            (alter-app-ref! app-ref
                            (fn add-component-to-app [app]

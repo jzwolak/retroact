@@ -2,6 +2,8 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.tools.logging :as log]
             [clojure.set :refer [difference]]
+            [retroact.swing.create-fns :as create]
+            [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count]]
@@ -9,10 +11,11 @@
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException)
            (java.awt CardLayout Color Component Container Dimension BorderLayout)
-           (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter)
+           (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JFrame JLabel JList JPanel JScrollPane JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree SwingUtilities)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree RootPaneContainer SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
+           (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)))
 
 
@@ -25,9 +28,12 @@
 ; component. Perhaps I can create a helper that quickly gets that - like (get-view (.getSource event)).
 ; Perhaps the rule of thumb should be to get things that are hard to get and not bother with things that are easy.
 ;
-; Sometimes the event does not have a .getSource method. So pass the component to.
+; Sometimes the event does not have a .getSource method. So pass the component too.
 ; Maybe use these as args:
 ;   app-ref component event optional-data
+; Or maybe
+;   ctx event optional-data
+; where ctx contains app-ref, app-val, onscreen-component, and potentially old-view, new-view (or just view).
 
 
 (def client-prop-prefix "retroact-")
@@ -97,11 +103,22 @@
     (componentResized [component-event]
       (component-resize-handler component-event))))
 
+(defn reify-component-hidden-listener
+  [handler]
+  (proxy [ComponentAdapter] []
+    (componentHidden [component-event]
+      (handler component-event))))
+
 (defn reify-property-change-listener
   [property-change-handler]
   (reify PropertyChangeListener
     (propertyChange [this property-change-event]
       (property-change-handler property-change-event))))
+
+(defn proxy-window-listener-close [app-ref onscreen-component handler]
+  (proxy [WindowAdapter] []
+    (windowClosed [window-event]
+      (handler app-ref onscreen-component window-event))))
 
 (defn proxy-mouse-listener-click [app-ref click-handler]
   (proxy [MouseAdapter] []
@@ -158,11 +175,17 @@
   (let [width (-> c .getSize .getWidth)]
     (.setSize c (Dimension. width height))))
 
+(defn set-on-close [c ctx action]
+  (if (contains? on-close-action-map action)
+    (.setDefaultCloseOperation c (on-close-action-map action))
+    (.addWindowListener c (proxy-window-listener-close (:app-ref ctx) c action))))
+
 
 ; :contents fns
 (defmulti get-existing-children class)
 (defmethod get-existing-children Container [c] (.getComponents c))
-(defmethod get-existing-children JFrame [c] (.getComponents (.getContentPane c)))
+(defmethod get-existing-children RootPaneContainer [c] (.getComponents (.getContentPane c)))
+(prefer-method get-existing-children RootPaneContainer Container)
 (defmethod get-existing-children JList [jlist]
   (let [model (.getModel jlist)]
     (log/warn "JList get-existing-children not implemented")
@@ -173,11 +196,14 @@
 (defmethod get-existing-children JTabbedPane [tabbed-pane]
   (let [num-tabs (.getTabCount tabbed-pane)]
     (mapv #(.getTabComponentAt tabbed-pane %) (range 0 num-tabs))))
+(defmethod get-existing-children JMenu [menu]
+  (.getMenuComponents menu))
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
 (defmethod add-new-child-at Container [^Container c ^Component child view index]
   (.add ^Container c child (:constraints view) ^int index))
-(defmethod add-new-child-at JFrame [^Container c ^Component child view index] (.add ^Container (.getContentPane c) child (:constraints view) ^int index))
+(defmethod add-new-child-at RootPaneContainer [^Container c ^Component child view index] (.add ^Container (.getContentPane c) child (:constraints view) ^int index))
+(prefer-method add-new-child-at RootPaneContainer Container)
 (defmethod add-new-child-at JList [^JList jlist ^Component child view index]
   (let [model (.getModel jlist)]
     (println "jlist add-new-child-at" index "(model class:" (class model) " size =" (.getSize model) ")" child)
@@ -188,16 +214,24 @@
         icon (:tab-icon view)
         tooltip (:tab-tooltip view)]
     (.insertTab tabbed-pane title icon child tooltip index)))
+(defmethod add-new-child-at JMenu [menu child view index]
+  (.add ^JMenu menu ^Component child ^int index))
 
 (defmulti remove-child-at (fn [container index] (class container)))
 (defmethod remove-child-at Container [c index] (.remove c index))
-(defmethod remove-child-at JFrame [c index] (.remove (.getContentPane c) index))
+(defmethod remove-child-at RootPaneContainer [c index] (.remove (.getContentPane c) index))
+(prefer-method remove-child-at RootPaneContainer Container)
 (defmethod remove-child-at JList [jlist index] (println "JList remove-child-at not implemented yet"))
-(defmethod remove-child-at JTabbedPane [tabbed-pane index] (.removeTabAt tabbed-pane index))
+(defmethod remove-child-at JTabbedPane [tabbed-pane index]
+  (log/info "removing tab, just want to check the current thread")
+  (.removeTabAt tabbed-pane index))
+(defmethod remove-child-at JMenu [menu index]
+  (.remove menu ^int index))
 
 (defmulti get-child-at (fn [container index] (class container)))
 (defmethod get-child-at Container [c index] (.getComponent c index))
-(defmethod get-child-at JFrame [c index] (.getComponent (.getContentPane c) index))
+(defmethod get-child-at RootPaneContainer [c index] (.getComponent (.getContentPane c) index))
+(prefer-method get-child-at RootPaneContainer Container)
 (defmethod get-child-at JList [jlist index]
   (let [child
         (-> jlist
@@ -206,6 +240,7 @@
     (println "jlist get-child-at:" child)
     child))
 (defmethod get-child-at JTabbedPane [tabbed-pane index] (.getComponentAt tabbed-pane index))
+(defmethod get-child-at JMenu [menu index] (.getMenuComponent menu index))
 ; end :contents fns
 
 
@@ -229,11 +264,17 @@
    :card-layout   CardLayout
    :check-box     JCheckBox
    :combo-box     create-jcombobox
+   :dialog        create/create-jdialog                            ; uses :owner attr in constructor
+   :file-chooser  JFileChooser
+   :file-name-extension-filter create/create-file-name-extension-filter
    :frame         JFrame
    :label         JLabel
    :list          create-jlist
+   :menu          JMenu
+   :menu-item     JMenuItem
    :mig-layout    MigLayout
    :panel         JPanel
+   :separator     JSeparator
    :split-pane    JSplitPane
    :tabbed-pane   JTabbedPane
    :table         create-jtable
@@ -259,16 +300,24 @@
     (.removeAllElements model)
     (.addAll model data)))
 
-(defn set-tab-title
-  [c ctx title]
+(defn- set-on-tab
+  [c set-fn]
   (let [parent (.getParent c)
         [tabbed-pane child] (if (instance? JScrollPane parent)
                               [(.getParent parent) parent]
                               [parent c])]
     (if (instance? JTabbedPane tabbed-pane)
       (let [index (.indexOfComponent tabbed-pane child)]
-        (.setTitleAt tabbed-pane index title))
+        (set-fn tabbed-pane index))
       (log/warn "could not set title for tab because component is not a child of a tabbed pane"))))
+
+(defn- set-tab-title
+  [c ctx title]
+  (set-on-tab c (fn [tabbed-pane index] (.setTitleAt tabbed-pane index title))))
+
+(defn- set-tab-tooltip
+  [c ctx tooltip]
+  (set-on-tab c (fn [tabbed-pane index] (.setToolTipTextAt tabbed-pane index tooltip))))
 
 (defn set-column-names
   [c ctx column-names]
@@ -315,6 +364,9 @@
 
 (defn on-component-resize [c ctx component-resize-handler]
   (.addComponentListener c (reify-component-resize-listener (fn [ce] (component-resize-handler ctx ce)))))
+
+(defn on-component-hidden [c ctx handler]
+  (.addComponentListener c (reify-component-hidden-listener (fn [ce] (handler ctx ce)))))
 
 (defn on-property-change [c ctx property-change-handler]
   (.addPropertyChangeListener c (reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
@@ -381,42 +433,50 @@
 ; *** :render and :class are reserved attributes, do not use! ***
 (def attr-appliers
   {:background             (fn set-background [c ctx color] (cond
-                                                           (instance? JFrame c) (.setBackground (.getContentPane c) (Color. color))
-                                                           :else (.setBackground c (Color. color))))
+                                                              (instance? RootPaneContainer c) (.setBackground (.getContentPane c) (Color. color))
+                                                              :else (.setBackground c (Color. color))))
    :border                 (fn set-border [c ctx border] (.setBorder c border))
    :client-properties      update-client-properties
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
-   :enabled                (fn set-enabled [c ctx enabled] (.setEnabled c enabled))
+   :description            {:recreate [FileNameExtensionFilter]}
+   :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
+   :enabled                (fn set-enabled [c ctx enabled]
+                             (log/info ".setEnabled to" (boolean enabled) "with raw val" enabled "on" c)
+                             (.setEnabled c ^boolean (boolean enabled)))
+   :extensions             {:recreate [FileNameExtensionFilter]}
+   :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
+                            :get (fn get-file-filter [c ctx] (.getFileFilter c))}
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
    :data                   (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
    ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.
    :margin                 (fn set-margin [c ctx insets] (.setMargin c insets))
+   :modal                  (fn set-modal [c ctx modal] (.setModal c modal))
    :height                 set-height
    :layout                 {:set (fn set-layout [c ctx layout] (.setLayout c layout))
                             :get (fn get-layout [c ctx]
                                    (cond
-                                     (instance? JFrame c) (.getLayout (.getContentPane c))
+                                     (instance? RootPaneContainer c) (.getLayout (.getContentPane c))
                                      :else (.getLayout c)))}
    :name                   (fn set-name [c ctx name] (.setName c name))
    :opaque                 (fn set-opaque [c ctx opaque] (cond
-                                                           (instance? JFrame c) (.setOpaque (.getContentPane c) opaque)
+                                                           (instance? RootPaneContainer c) (.setOpaque (.getContentPane c) opaque)
                                                            :else (.setOpaque c opaque)))
+   :owner                  {:recreate [JDialog]}
    :row-selection-interval set-row-selection-interval
    :selected               (fn set-selected [c ctx selected?]
                              (.setSelected c selected?))
    :selected-index         {:deps [:contents]
-                            :fn (fn set-selected-index [c ctx index] (.setSelectedIndex c index))}
+                            :fn   (fn set-selected-index [c ctx index] (.setSelectedIndex c index))}
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
    :text                   (fn set-text [c ctx text]
                              #_(.printStackTrace (Exception. "stack trace"))
                              (let [old-text (.getText c)]
                                (when (text-changed? old-text text)
                                  (.setText c text))))
+   :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
-   ; TODO: if action not in on-close-action-map, then add it as a WindowListener to the close event
-   :on-close               (fn on-close [c ctx action]
-                             (.setDefaultCloseOperation c (on-close-action-map action)))
+   :on-close               set-on-close
    :layout-constraints     (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    :row-constraints        (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints     (fn set-column-constraints [c ctx constraints]
@@ -439,12 +499,20 @@
    :one-touch-expandable   (fn set-one-touch-expandable [c ctx expandable] (.setOneTouchExpandable c expandable))
    :orientation            (fn set-orientation [c ctx orientation] (.setOrientation c (orientation-map orientation)))
    :divider-location       (fn set-divider-location [c ctx location]
-                             (.setDividerLocation c ^int location))
+                             (log/warn "setting divider location to" location)
+                             (if (int? location)
+                               (.setDividerLocation c ^int (int location))
+                               (do
+                                 (log/warn "using divider ratio")
+                                 (.setDividerLocation c ^double (double location)))))
    ; careful with this one, it only works _after_ the component has a size... that is, rendered on screen.
-   :divider-location-ratio (fn set-divider-location [c ctx location]
-                             (.setDividerLocation c ^double location))
+   ;   :divider-location-ratio
+   #_(fn set-divider-location [c ctx location]
+       (log/warn "setting divider location to ratio" location)
+       (.setDividerLocation c ^double location))
    ; Tabbed Pane attr appliers
    :tab-title              set-tab-title
+   :tab-tooltip            set-tab-tooltip
    ; Table attr appliers
    :column-names           set-column-names
    :row-editable-fn        set-row-editable-fn
@@ -465,12 +533,18 @@
                                                                             (action-handler (:app-ref ctx) action-event)))))
    :on-change              on-change
    :on-component-resize    on-component-resize
+   :on-component-hidden    on-component-hidden
    :on-property-change     on-property-change
    :on-selection-change    on-selection-change
    :on-text-change         on-text-change
    :on-set-value-at        on-set-value-at
    ; Mouse listeners
    :on-click               on-click
+   ; Menus
+   :menu-bar               {:get-existing-children mb/get-existing-children
+                            :add-new-child-at      mb/add-new-child-at
+                            :remove-child-at       mb/remove-child-at
+                            :get-child-at          mb/get-child-at}
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:

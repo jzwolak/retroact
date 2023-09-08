@@ -241,10 +241,9 @@
 (defn- default-applier-fn [c ctx v])
 
 (defn- get-applier-fn [attr-applier]
-  (let [applier-fn (or (:fn attr-applier) attr-applier)]
-    (if (fn? applier-fn)
-      applier-fn
-      default-applier-fn)))
+  (if (map? attr-applier)
+    (get attr-applier :fn default-applier-fn)
+    attr-applier))
 
 (defn apply-attributes
   "Takes the diff of the old-view and new-view and applies only the changes to the onscreen component. The old-view is

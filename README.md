@@ -204,3 +204,24 @@ rendered. Therefor, the value of app-ref, or more importantly the rendered
 view, is saved with the onscreen component. This can then be retrieved as the
 old value of the rendered view for comparison to see what has changed from
 one view rendering to the next.
+
+# Tests
+
+Tests can be run using Clojure's builtin testing using Gradle or the REPL.
+
+Using Gradle, run
+```bash
+$ ./gradlew test
+```
+
+Using the REPL, start an nREPL server with `./gradlew clojureRepl` in one terminal, then use whatever means you have to
+connect to an nREPL server (e.g., IntelliJ has a builtin connect to nREPL run configuration that can be added using
+"Edit Configurations"). From the REPL run
+
+```
+=> require '[retroact.test] :reload)
+```
+
+You may rerun the above command as much as you like without restarting the nREPL server. You will, of course, need to
+reload any namespaces that have changed if you're editing/writing code (:reload-all may be used instead of :reload to
+facilitate this).

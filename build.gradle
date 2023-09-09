@@ -132,7 +132,7 @@ publishing {
     }
     repositories {
         maven {
-            // file repo for testing:
+            // file repo for test publishing:
             name "buildDirRepo"
             url = layout.buildDirectory.dir("repo")
         }

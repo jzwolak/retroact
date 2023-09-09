@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
+            [retroact.algorithms.core :as ra]
             [retroact.swing :as swing])
   (:import (clojure.lang Agent Atom Ref)
            (java.lang.ref WeakReference)))
@@ -194,15 +195,34 @@
 (defn- create-child-id->index [view attr]
   (into {} (map (fn [child index] [(:id child) index]) (get view attr) (range))))
 
-(defn calculate-gcs [old-view new-view attr]
-  (loop [old-children (get old-view attr)
-         new-children (get new-view attr)
-         gcs-matrix []]
-    ))
-
 (defn- apply-children-applier-with-ids
   [attr-applier component ctx attr old-view new-view]
-  (throw (RuntimeException. "children not updated!!"))
+  (let [{:keys [remove-child-at get-child-at add-new-child-at]} attr-applier
+        old-id->child (into {} (map (fn [child] [(:id child) child]) (get old-view attr)))
+        new-id->child (into {} (map (fn [child] [(:id child) child]) (get new-view attr)))
+        old-child-ids (mapv :id (get old-view attr))
+        new-child-ids (mapv :id (get new-view attr))
+        [remove-ops insert-ops] (ra/calculate-patch-operations old-child-ids new-child-ids)
+        id->component
+        (loop [id->component {} remove-op (first remove-ops) remove-ops (rest remove-ops)]
+          (cond
+            (nil? remove-op) id->component
+            :else (let [[_ index id] remove-op
+                        child-component (run-on-toolkit-thread-with-result ctx get-child-at component index)]
+                    (run-on-toolkit-thread ctx remove-child-at component index)
+                    (recur (assoc id->component id child-component) (first remove-ops) (rest remove-ops)))))]
+    ; insert, create if necessary
+    (doseq [[_ index id] insert-ops]
+      (let [child-view (get new-id->child id)
+            child-component (get id->component id (build-ui ctx child-view))]
+        (run-on-toolkit-thread ctx add-new-child-at component child-component child-view index)))
+    ; loop through all new children in view (not onscreen-component) and if there's a matching old child, then run update
+    (doseq [[{:keys [id] :as child} index] (map vector (get new-view attr) (range))]
+      (when-let [old-child-view (get old-id->child id)]
+        (apply-attributes (assoc ctx
+                            :onscreen-component (run-on-toolkit-thread-with-result ctx get-child-at component index)
+                            :old-view old-child-view :new-view child))))
+    )
   #_(let [old-child-id->index (create-child-id->index old-view attr)
         new-child-id->index (create-child-id->index new-view attr)
         conserved-child-ids (union (set (keys new-child-id->index)) (set (keys old-child-id->index)))
@@ -217,7 +237,8 @@
    false. The fallback applier will then be used."
   [attr-applier component ctx attr old-view new-view]
   ; TODO: remove the not-empty check. That's there to force use of the fallback until the main apply-children-applier-with-ids is implemented.
-  (if (and (every? :id (get old-view attr)) (every? :id (get new-view attr)) (not-empty (get new-view attr)))
+  ; I commented it out, and await some time before removing it all together.
+  (if (and (every? :id (get old-view attr)) (every? :id (get new-view attr)) #_(not-empty (get new-view attr)))
     (apply-children-applier-with-ids attr-applier component ctx attr old-view new-view)
     (apply-children-applier-fallback attr-applier component ctx attr old-view new-view)))
 

@@ -1,6 +1,8 @@
 (ns retroact.test
   (:require [clojure.test :refer :all]
-            [retroact.core :refer [init-app-ref create-comp init-app calculate-gcs]]
+            [clojure.tools.logging :as log]
+            [retroact.core :refer [init-app-ref create-comp init-app]]
+            [retroact.algorithms.core :refer [calculate-lcs calculate-patch-operations]]
             [examples.greeter :refer [greeter-app]]))
 
 (defn hello-world-app []
@@ -23,11 +25,26 @@
     (init-app-ref app-ref)
     (create-comp app-ref (hello-world-app))))
 
-(deftest greatest-common-subsequence
+(deftest longest-common-subsequence
   (let [old-view {:contents [{:id :a} {:id :b} {:id :c} {:id :d} {:id :e} {:id :f} {:id :g}]}
         new-view {:contents [{:id :b} {:id :g} {:id :a} {:id :h} {:id :c} {:id :f}]}]
-    (is (= [:a :c :f] (calculate-gcs old-view new-view :contents))
+    (is (= [{:id :b} {:id :c} {:id :f}] (calculate-lcs (:contents old-view) (:contents new-view)))
         "Greatest common subsequence")))
+
+(deftest patch-operations
+  (let [old-view {:contents [{:id :a} {:id :b} {:id :c} {:id :d} {:id :e} {:id :f} {:id :g}]}
+        new-view {:contents [{:id :b} {:id :g} {:id :a} {:id :h} {:id :c} {:id :f}]}]
+    (is (= [[[:remove 6 {:id :g}] [:remove 4 {:id :e}] [:remove 3 {:id :d}] [:remove 0 {:id :a}]] [[:insert 1 {:id :h}] [:insert 1 {:id :a}] [:insert 1 {:id :g}]]]
+           (calculate-patch-operations (:contents old-view) (:contents new-view)))
+        "Patch operations")
+    (is (= [[[:remove 0 :a]] []]
+           (calculate-patch-operations [:a] [])))
+    (is (= [[] [[:insert 0 :a]]]
+           (calculate-patch-operations [] [:a])))
+    (is (= [[] []]
+           (calculate-patch-operations [] [])))
+    (is (= [[] []]
+           (calculate-patch-operations [:a :b] [:a :b])))))
 
 #_(deftest greeter-example
   (let [app-ref (init-app (greeter-app))]
@@ -38,4 +55,6 @@
     ))
 
 (run-tests)
-(shutdown-agents)
+
+; Not sure why this was here, but it prevents rerunning tests from REPL.
+#_(shutdown-agents)

@@ -5,9 +5,14 @@
 An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.
 
 The goal is to make something that can be used in Java and with legacy applications and have it be completely
-Functional Reactive Programming (FRP).
+Functional Reactive Programming (FRP). The user interface code is declarative, it is a function of the app state, and
+the code that initializes and updates the UI is one.
 
 This is a pure Clojure implementation and no Java bindings. There may be a future version with a Java API.
+
+Though this is an experimental project, it is being used in a production rich internet client application for biological
+modeling and simulation. Its status will likely be upgraded, as it has matured significantly since the above text was
+written.
 
 ## Unique Contribution
 
@@ -84,7 +89,9 @@ actually run the map. It's also useful in case something in the map should be dy
 However, there is nothing to prevent you from defining the map statically using `def` or some other means. Please
 remember that the contents of this map are to be treated as a value (that is, immutable). There are a few exceptions
 to this, but that's for another discussion. Consider the contents immutable, only put immutable things in there, and if
-something is mutable that you wish to be in there, don't mutate it.
+something is mutable that you wish to be in there, don't mutate it. That does not mean the result of calling the render
+fn should return the same value, but those values should be immutable (true Clojure values) or Java Objects where you
+pledge not to mutate their state.
 
 
 # Run
@@ -187,6 +194,124 @@ the new one even if the actual code inside is identical.
 
 In some cases the attribute may not properly remove the previous fn, though this would be considered a bug.
 
+## Extending
+
+Retroact may be extended to support any custom classes (Swing or otherwise) or support Swing classes that are
+not already supported. Use the `register-comp-type!` fn to register classes (as components) and attribute appliers
+for those classes. Note that attribute appliers are always global and will work on _all_ components. This may be avoided
+by specifically checking the instance type within the body of the attribute applier and executing the body only for
+the desired instance types.
+
+To register a component, somewhere in your startup code (before the component is used) run something like
+
+```clojure
+(register-comp-type! app-ref :my-comp MyComp {:my-attr my-attr-applier-fn})
+```
+
+`:my-comp` and `:my-attr` are arbitrary names for the keys you want to use. A rendered component view with these
+attribute names will then look like
+
+```clojure
+{:class :my-comp
+ :my-attr "my attribute value"}
+ ```
+
+`MyComp` is the class name of the component. Optionally a fn may be used that returns a new instance of the component.
+Fns have the advantage of receiving the view (as seen above) and may take attributes or other information from that
+view to use in the constructor. When a change in an attribute value requires recreating the instance then that must
+be specified during the `register-comp-type!` call with
+
+```clojure
+(register-comp-type! app-ref :my-comp MyComp {:my-attr {:recreate [MyComp]}})
+```
+
+The above will always recreate `MyComp` instances when `:my-attr` changes. It will not affect other instance types. Add
+more classes to the `:recreate` vector if you wish other instance types to be recreated also. Remember, the attribute
+applier works on all instance types! Though, this will only affect components created using `app-ref` as the app state
+in `create-comp`.
+
+Here's an example that adds `JLabel`, which is already supported, but this is what it could look like.
+
+```clojure
+(register-comp-type! app-ref :name-label JLabel {:name-text (fn [c ctx name] (.setText c (str "Name: " name))])})
+```
+
+Be careful not to override existing attribute appliers. See `retroact.swing` for a list of appliers for Swing. One way
+to reliably avoid this is to namespace your keys using `::` (two colons) or by explicity specifying the namespace. None
+of the default Retroact keys are namespaced. Same for the class name key.
+
+### Appliers In Depth
+
+Attribute appliers, in their simplest form, are fns that know how to set the value of the attribute on the onscreen
+component. There are many cases where a simple function won't do, therefore, attribute appliers may also be a map with
+more details on how they should work.
+
+There are three basic types of appliers: fn applier, component applier, and children applier.
+
+* fn applier - assumes the attribute is a "simple" value like a string, integer, color, point, etc.. Note that some of
+  these are objects, but they are small, easy to recreate, and usually immutable.
+* component applier - assumes the attribute points to a heavier weight component that has attributes of its own. This
+  is a nested component and will have a map in the rendered view to represent _its_ attributes. The attributes will be
+  recursively applied and the component will not be recreated or discarded.
+* children applier - assumes the attribute points to a list or array of components that must be managed. The rendered
+  view will be a vector of maps where each map represents a component.
+
+Here are some examples of the specification and usage of each type of applier.
+
+```clojure
+; specification
+{:fn-applier           attr-setter-fn
+ :fn-applier-alternate {:fn attr-setter2-fn}
+ :component-applier    {:set set-component-fn
+                        :get get-component-fn}
+ :children-applier     {:get-child-at          get-child-at-fn
+                        :add-new-child-at      add-new-child-at-fn
+                        :get-existing-children get-existing-children-fn
+                        :remove-child-at       remove-child-at-fn}}
+
+; usage
+(defn render-fn [app-ref app-val]
+  {:class :my-comp
+   :fn-applier "bar"
+   :fn-applier-alternate "foo"
+   :component-applier {:class :label :text "World"}
+   :children-applier [{:class :label :text "Hello"}]})
+```
+
+See `retroact.swing` for complete examples of the implementations of the different types.
+
+Each applier map may also contain `:recreate` and `:deps` for further functionality. A map with only `:recreate` will
+only affect recreation of an instance when the attribute changes and will have no way to actually set the value of the
+attribute on an existing instance. This is the case for some classes (`FileNameExtensionFilter` for instance).
+
+`:deps` specifies the keys for other attribute appliers that must run before the current one. Like the `:selected-index`
+applier for `:tabbed-pane` (`JTabbedPane`). It must run _after_ the `:contents` have been updated otherwise the selected
+index may not exist.
+
+#### Update On Change
+
+Appliers are _not_ run unless the value returned by the render fn has changed. In particular, the _value of the
+attribute_ must have changed since it was last set. There are some things to consider here. One is that the component
+ought not be modified outside Retroact because Retroact will have no way to know the component state has changed. If the
+component state is changed by the user (like the value of a `JTextField`) then you'll have to update that value in the
+app state as the user changes it if that attribute applier is being used. If the `:text` attribute applier is not being
+used then it's possible to just get the value of the `JTextField` as necessary (e.g., in a handler).
+
+Infinite loops (updates) may occur if the app state is being updated from the onscreen component and the onscreen
+component is being updated from the app state. One particularly difficult situation is when the value of the onscreen
+component is behind the app state and an event is queued for updating the app state the same time an event is queued
+to update the onscreen component from the app state. This can cause the state to bounce between two values. Usually,
+these loops do not occur, but they may occur when the onscreen component state and the app state are being synced and
+the onscreen component state may be directly modified by the user. In such cases, checking if a modification came from
+the user (mouse or key event) can break the loop. Here's code I've used to do this check.
+
+```clojure
+(defn user-initiated? []
+  (let [cause (EventQueue/getCurrentEvent)]
+    (or (instance? MouseEvent cause) (instance? KeyEvent cause))))
+```
+
+This isn't foolproof, but it works in many cases.
 
 # Internals
 

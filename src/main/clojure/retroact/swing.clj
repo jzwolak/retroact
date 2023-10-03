@@ -13,7 +13,7 @@
            (java.awt CardLayout Color Component Container Dimension BorderLayout)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextField JComponent JTable JToolBar JTree RootPaneContainer SwingUtilities)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)))
@@ -256,31 +256,32 @@
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:default       (fn default-swing-component-constructor [ui]
+  {:default                    (fn default-swing-component-constructor [ui]
                     (log/warn "using default constructor to generate a JPanel")
                     (JPanel.))
-   :border-layout BorderLayout
-   :button        JButton
-   :card-layout   CardLayout
-   :check-box     JCheckBox
-   :combo-box     create-jcombobox
-   :dialog        create/create-jdialog                            ; uses :owner attr in constructor
-   :file-chooser  JFileChooser
+   :border-layout              BorderLayout
+   :button                     JButton
+   :card-layout                CardLayout
+   :check-box                  JCheckBox
+   :combo-box                  create-jcombobox
+   :dialog                     create/create-jdialog                            ; uses :owner attr in constructor
+   :file-chooser               JFileChooser
    :file-name-extension-filter create/create-file-name-extension-filter
-   :frame         JFrame
-   :label         JLabel
-   :list          create-jlist
-   :menu          JMenu
-   :menu-item     JMenuItem
-   :mig-layout    MigLayout
-   :panel         JPanel
-   :separator     JSeparator
-   :split-pane    JSplitPane
-   :tabbed-pane   JTabbedPane
-   :table         create-jtable
-   :text-field    JTextField
-   :tool-bar      JToolBar
-   :tree          create-jtree})
+   :frame                      JFrame
+   :label                      JLabel
+   :list                       create-jlist
+   :menu                       JMenu
+   :menu-item                  JMenuItem
+   :mig-layout                 MigLayout
+   :panel                      JPanel
+   :separator                  JSeparator
+   :split-pane                 JSplitPane
+   :tabbed-pane                JTabbedPane
+   :table                      create-jtable
+   :text-field                 JTextField
+   :toggle-button              JToggleButton
+   :tool-bar                   JToolBar
+   :tree                       create-jtree})
 
 (defn text-changed? [old-text new-text]
   (not
@@ -464,7 +465,7 @@
    :owner                  {:recreate [JDialog]}
    :row-selection-interval set-row-selection-interval
    :selected               (fn set-selected [c ctx selected?]
-                             (.setSelected c selected?))
+                             (.setSelected c (boolean selected?)))
    :selected-index         {:deps [:contents]
                             :fn   (fn set-selected-index [c ctx index] (.setSelectedIndex c index))}
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))

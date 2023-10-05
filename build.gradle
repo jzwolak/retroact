@@ -39,6 +39,7 @@ clojure {
         main {
             aotNamespaces.add("retroact.swing.compiled.jtable")
             aotNamespaces.add("retroact.swing.compiled.jtree")
+            aotNamespaces.add("retroact.swing.compiled.retroact-invocation-event")
         }
     }
 }

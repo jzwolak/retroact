@@ -10,13 +10,14 @@
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException)
-           (java.awt CardLayout Color Component Container Dimension BorderLayout)
+           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font Toolkit)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
-           (net.miginfocom.swing MigLayout)))
+           (net.miginfocom.swing MigLayout)
+           (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
 ; TODO: I need to decide a regular way to pass arguments to handler fns. Currently I sometimes pass ctx, sometimes
@@ -42,7 +43,15 @@
   (.revalidate c))
 
 (defn run-on-toolkit-thread [f & args]
-  (SwingUtilities/invokeLater #(apply f args)))
+  ; Toolkit.getEventQueue().postEvent(
+  ;                                   new InvocationEvent(Toolkit.getDefaultToolkit(), runnable)
+  ; )
+  (.postEvent ^EventQueue (-> (Toolkit/getDefaultToolkit) (.getSystemEventQueue))
+              ^AWTEvent (RetroactInvocationEvent. (Toolkit/getDefaultToolkit) #(apply f args)))
+  #_(SwingUtilities/invokeLater #(apply f args)))
+
+(defn retroact-initiated? []
+  (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent)))
 
 (defmulti set-client-prop (fn [comp name value] (class comp)))
 (defmethod set-client-prop JComponent [comp name value]
@@ -131,6 +140,8 @@
   (reify TreeSelectionListener
     (valueChanged [this event]
       (let [onscreen-component (.getSource event)
+            ; TODO: I should also pass in the event to the selection-change-handler because selected values don't
+            ; indicate the path and the same value may be at multiple leafs.
             selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
         (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
 
@@ -447,6 +458,8 @@
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}
+   :font-size              (fn set-font-size [c ctx size] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int (.getStyle f) ^float size))))
+   :font-style             (fn set-font-style [c ctx style] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int style ^float (.getSize f)))))
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
    :data                   (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
    ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.

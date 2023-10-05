@@ -313,6 +313,31 @@ the user (mouse or key event) can break the loop. Here's code I've used to do th
 
 This isn't foolproof, but it works in many cases.
 
+## Side Effects
+
+Retroact has support for side effects, but be careful. Somethings should _not_ be side effects. Here's a few examples
+of things that should be side effects:
+
+* making a network call to send an email
+* starting a long running task to calculate something complex
+* making an asynchronous network call to load data
+
+Some of these things may just be started inside a handler function and not need Retroact's side effect support.
+
+Some things that are _not_ side effects:
+
+* expanding a tree node after the user clicks a button
+* updating a selection
+* clearing text in a text field after a dialog "Ok" button is pressed
+
+All of these should be encoded in the application state and the view should be rendered from that state as a function
+of the state. So if the expansion of a tree node is to happen in response to the user clicking a button, then the
+application should _update the application state_ in response to the user clicking a button. The view will then
+automatically expand the tree node using the appropriate applier. The application will, of course, have to specify
+the applier in the appropriate render fn and reference the application state that holds the tree node expansion values.
+If the appropriate applier does not exist, then you may write one. They are easy enough to write and will maintain
+the ease of a declarative view and the view-is-a-function-of-the-state paradigm. Everything will be easier this way.
+
 # Internals
 
 When the app-ref (application state) changes, Retroact has a watch on that

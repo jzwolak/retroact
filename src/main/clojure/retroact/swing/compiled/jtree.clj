@@ -1,6 +1,7 @@
 (ns retroact.swing.compiled.jtree
   (:require [clojure.tools.logging :as log])
-  (:import (java.util UUID)
+  (:import (java.awt EventQueue)
+           (java.util UUID)
            (javax.swing SwingUtilities)
            (javax.swing.event TreeModelEvent)
            (javax.swing.tree TreePath)))
@@ -21,7 +22,9 @@
   :methods [[getNode [javax.swing.tree.TreePath] Object]
             [setData [clojure.lang.IPersistentVector] void]
             [setModelFn [clojure.lang.IFn] void]
-            [setRenderFn [clojure.lang.IFn] void]])
+            [setRenderFn [clojure.lang.IFn] void]
+            [setTreeComponent [javax.swing.JTree] void]
+            [setSelectionFn [clojure.lang.IFn] void]])
 
 (gen-class
   :name "retroact.swing.compiled.jtree.RTreeCellRenderer"
@@ -31,18 +34,36 @@
 
 (defn- default-tree-model-fn [default-tree-root data] [default-tree-root {default-tree-root data}])
 
+(defn- print-tree-paths [print-prefix tree-paths]
+  (when (= 0 (count tree-paths))
+    (log/info print-prefix "no tree paths to print"))
+  (doseq [tree-path tree-paths]
+    (log/info print-prefix (.getPath tree-path))
+    (doseq [path-part (.getPath tree-path)]
+      (log/info "    part:" path-part))))
+
 (defn- tree-model-watch
   [this _key _ref old-value new-value]
   (let [old-tree (:tree old-value)
         new-tree (:tree new-value)
+        old-tree-selection (:tree-selection old-value)
+        new-tree-selection (:tree-selection new-value)
+        tree-component (:tree-component new-value)
         listeners (:listeners new-value)]
+    (when (not (SwingUtilities/isEventDispatchThread))
+      (log/error (RuntimeException. "RTreeModel method called off EDT.")
+                 (str "RTreeModel method called off EDT. RTreeModel methods should be called on EDT. "
+                      "Continuing, but behavior may not be correct.")))
     (when (not= old-tree new-tree)
       (let [tree-model-event (TreeModelEvent. this (object-array [(:tree-root new-value)]))]
         (doseq [listener listeners]
-          (SwingUtilities/invokeLater
-            (fn []
-              (log/info "firing tree structure changed")
-              (.treeStructureChanged listener tree-model-event))))))))
+          (.treeStructureChanged listener tree-model-event))))
+    (when (not= old-tree-selection new-tree-selection)
+      (let [tree-paths (mapv (fn [path] (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+                             new-tree-selection)]
+        #_(print-tree-paths "would be tree-path:" tree-paths)
+        #_(print-tree-paths "actual   tree-path:" (.getSelectionPaths tree-component))
+        (.setSelectionPaths tree-component (into-array TreePath tree-paths))))))
 
 (defn rtree-model-init-state []
   (let [tree-root (str (UUID/randomUUID))
@@ -50,6 +71,7 @@
                      ; map of nodes to children
                      :tree   {tree-root []}
                      :tree-root tree-root
+                     :tree-selection nil
                      :tree-model-fn default-tree-model-fn
                      :tree-render-fn identity
                      :listeners #{}})]
@@ -59,13 +81,20 @@
 (defn rtree-model-post-init [this & _]
   (add-watch (.state this) :tree-model-self-watch (partial tree-model-watch this)))
 
+(defn- update-tree-selection [{:keys [data tree tree-root tree-selection tree-selection-fn] :as state}]
+  (if tree-selection-fn
+    (assoc state :tree-selection (tree-selection-fn tree-root tree data))
+    (dissoc state :tree-selection)))
+
 (defn- update-tree
   [state]
-  (let [data (:data state)
-        tree-model-fn (:tree-model-fn state)
-        [tree-root tree] (tree-model-fn (:tree-root state) data)]
-    (assoc state :tree tree
-                 :tree-root tree-root)))
+  (->
+    (let [data (:data state)
+          tree-model-fn (:tree-model-fn state)
+          [tree-root tree] (tree-model-fn (:tree-root state) data)]
+      (assoc state :tree tree
+                   :tree-root tree-root))
+    (update-tree-selection)))
 
 (defn- update-data [state data]
   (if (= (:data state) data)
@@ -136,6 +165,14 @@
 (defn rtree-model-setRenderFn
   [this render-fn]
   (swap! (.state this) assoc :tree-render-fn render-fn))
+
+(defn rtree-model-setSelectionFn
+  [this selection-fn]
+  (swap! (.state this) assoc :tree-selection-fn selection-fn))
+
+(defn rtree-model-setTreeComponent
+  [this tree-component]
+  (swap! (.state this) assoc :tree-component tree-component))
 
 (defn- set-icon [cell-renderer icon]
   (.setClosedIcon cell-renderer icon)

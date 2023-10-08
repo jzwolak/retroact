@@ -6,7 +6,7 @@
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
-                                          set-tree-toggle-click-count]]
+                                          set-tree-toggle-click-count set-tree-selection-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException)
@@ -41,6 +41,13 @@
 
 (defn redraw-onscreen-component [c]
   (.revalidate c))
+
+(defn- create-color [color]
+  (cond
+    (instance? Color color) color
+    (and (vector? color) (= 3 (count color))) (Color. (nth color 0) (nth color 1) (nth color 2))
+    (and (vector? color)) (Color. (nth color 0) (nth color 1) (nth color 2) (nth color 3))
+    :else (Color. color)))
 
 (defn run-on-toolkit-thread [f & args]
   ; Toolkit.getEventQueue().postEvent(
@@ -445,10 +452,13 @@
 ; *** :render and :class are reserved attributes, do not use! ***
 (def attr-appliers
   {:background             (fn set-background [c ctx color] (cond
-                                                              (instance? RootPaneContainer c) (.setBackground (.getContentPane c) (Color. color))
-                                                              :else (.setBackground c (Color. color))))
+                                                              (instance? RootPaneContainer c) (.setBackground (.getContentPane c) (create-color color))
+                                                              :else (.setBackground c (create-color color))))
    :border                 (fn set-border [c ctx border] (.setBorder c border))
    :client-properties      update-client-properties
+   :color                  (fn set-color [c ctx color ] (cond
+                                                         (instance? RootPaneContainer c) (.setForeground (.getContentPane c) (create-color color))
+                                                         :else (.setForeground c (create-color color))))
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
@@ -484,9 +494,14 @@
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
    :text                   (fn set-text [c ctx text]
                              #_(.printStackTrace (Exception. "stack trace"))
-                             (let [old-text (.getText c)]
-                               (when (text-changed? old-text text)
-                                 (.setText c text))))
+                             (let [old-text (.getText c)
+                                   new-text (str text)]
+                               ; TODO: should be unnecessary. This must be left over from the early days.
+                               ; Though maybe it has to do with nil and empty string being treated the same. See text-changed?
+                               ; I added (str text) though, which converts nil to the empty string, so text-changed?
+                               ; shouldn't be necessary, I think.
+                               (when (text-changed? old-text new-text)
+                                 (.setText c new-text))))
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
@@ -535,6 +550,7 @@
    ; Tree attr appliers
    :tree-render-fn         set-tree-render-fn
    :tree-model-fn          set-tree-model-fn
+   :tree-selection-fn      set-tree-selection-fn
    :tree-data              set-tree-data
    :toggle-click-count     set-tree-toggle-click-count
 

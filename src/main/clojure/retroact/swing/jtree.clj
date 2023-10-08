@@ -1,6 +1,7 @@
 (ns retroact.swing.jtree
   (:require [clojure.tools.logging :as log])
   (:import (javax.swing JScrollPane JTree)
+           (javax.swing.tree TreeModel)
            (retroact.swing.compiled.jtree RTreeCellRenderer RTreeModel)))
 
 (defn safe-tree-set [tree f attribute]
@@ -15,6 +16,10 @@
            (let [model (.getModel tree)]
              (f model attr)))
     attribute))
+
+(defn set-tree-selection-fn
+  [c ctx tree-selection-fn]
+  (safe-tree-model-set c (memfn setSelectionFn tree-selection-fn) tree-selection-fn))
 
 (defn set-tree-model-fn
   [c ctx tree-model-fn]
@@ -33,7 +38,9 @@
   (safe-tree-set c (memfn setToggleClickCount t-count) t-count))
 
 (defn create-jtree [ui]
-  (let [tree (JTree. (RTreeModel.))]
+  (let [tree-model (RTreeModel.)
+        tree (JTree. ^TreeModel tree-model)]
+    (.setTreeComponent tree-model tree)
     (.setCellRenderer tree (RTreeCellRenderer.))
     (.setRootVisible tree false)
     (.setShowsRootHandles tree true)

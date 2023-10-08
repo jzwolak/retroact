@@ -284,6 +284,7 @@
     ; setting the value to nil (or false).
     (doseq [attr (get-sorted-attribute-keys attr-appliers (concat (keys old-view) (keys new-view)))]
       (when-let [attr-applier (get attr-appliers attr)]
+        #_(log/info "applying attr:" attr)
         (cond
           ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help

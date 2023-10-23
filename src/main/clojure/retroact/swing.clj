@@ -9,7 +9,7 @@
                                           set-tree-toggle-click-count set-tree-selection-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
-  (:import (clojure.lang ArityException)
+  (:import (clojure.lang ArityException Atom)
            (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font Toolkit)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
@@ -39,6 +39,15 @@
 
 (def client-prop-prefix "retroact-")
 
+; This holds a number for retroact initiated invocations on the EDT. Each invocation increments this value on start and
+; decrements on finish. This allows other events enqueued on the event queue to be marked as initiated by Retroact.
+; This is not foolproof as the event queue is thread safe and may take events from threads other than the EDT. Those
+; events may - when enqueued during a retroact invocation - be mis-labelled as retroact initiated. The foolproof way
+; to do this is to create a custom event queue that looks at where the events are coming from (what thread they're
+; coming from) and only marks those events that are enqueued from the EDT during a retroact invocation as retroact
+; initiated.
+(def retroact-initiated (atom 0))
+
 (defn redraw-onscreen-component [c]
   (.revalidate c))
 
@@ -49,16 +58,34 @@
     (and (vector? color)) (Color. (nth color 0) (nth color 1) (nth color 2) (nth color 3))
     :else (Color. color)))
 
-(defn run-on-toolkit-thread [f & args]
-  ; Toolkit.getEventQueue().postEvent(
-  ;                                   new InvocationEvent(Toolkit.getDefaultToolkit(), runnable)
-  ; )
+(defn- run-on-toolkit-thread-internal [f & args]
   (.postEvent ^EventQueue (-> (Toolkit/getDefaultToolkit) (.getSystemEventQueue))
-              ^AWTEvent (RetroactInvocationEvent. (Toolkit/getDefaultToolkit) #(apply f args)))
-  #_(SwingUtilities/invokeLater #(apply f args)))
+              ^AWTEvent (RetroactInvocationEvent. (Toolkit/getDefaultToolkit)
+                                                  (fn []
+                                                    (apply f args)
+                                                    (when (instance? Atom (first args))
+                                                      (log/info "got atom on toolkit thread with val:" @(first args)))
+                                                    ))))
 
-(defn retroact-initiated? []
-  (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent)))
+(defn run-on-toolkit-thread [f & args]
+  (run-on-toolkit-thread-internal swap! retroact-initiated inc)
+  (apply run-on-toolkit-thread-internal f args)
+  ; Double invoke later on toolkit thread is necessary to capture secondary events caused by f.
+  (run-on-toolkit-thread-internal #(SwingUtilities/invokeLater (fn [] (swap! retroact-initiated dec) (log/info "got atom on toolkit thread with val:" @retroact-initiated "after dec")))))
+
+
+(defn retroact-initiated?
+  "This only works sometimes in some cases. It needs to be refined. See comments for retroact-initiated var."
+  []
+  #_(let [instance-of (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent))
+        edt (SwingUtilities/isEventDispatchThread)
+        atom-val (> @retroact-initiated 0)]
+    (log/info "retroact-initiated? instance-of:" instance-of)
+    (log/info "retroact-initiated? edt:" edt)
+    (log/info "retroact-initiated? atom-val:" atom-val))
+  (or
+    (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent))
+    (and (SwingUtilities/isEventDispatchThread) (> @retroact-initiated 0))))
 
 (defmulti set-client-prop (fn [comp name value] (class comp)))
 (defmethod set-client-prop JComponent [comp name value]
@@ -186,11 +213,19 @@
     (doseq [[k v] properties] (.putClientProperty c k v))))
 
 (defn set-width [c ctx width]
-  (let [height (-> c .getSize .getHeight)]
+  (let [view-width (get-in ctx [:old-view :width])
+        onscreen-width (.getWidth c)
+        height (.getHeight c)]
+    (when (and (not= view-width onscreen-width) (not= onscreen-width width))
+      (log/warn "onscreen width changed outside Retroact since last update. view-width =" view-width ", onscreen-width =" onscreen-width ", new-width =" width))
     (.setSize c (Dimension. width height))))
 
 (defn set-height [c ctx height]
-  (let [width (-> c .getSize .getWidth)]
+  (let [view-height (get-in ctx [:old-view :height])
+        onscreen-height (.getHeight c)
+        width (-> c .getSize .getWidth)]
+    (when (and (not= view-height onscreen-height) (not= onscreen-height height))
+      (log/warn "onscreen height changed outside Retroact since last update. view-height =" view-height ", onscreen-height =" onscreen-height ", new-height =" height))
     (.setSize c (Dimension. width height))))
 
 (defn set-on-close [c ctx action]
@@ -592,6 +627,7 @@
 (def toolkit-config
   {:attr-appliers             `attr-appliers
    :assoc-view                `assoc-view
+   :get-view                  `get-view
    :redraw-onscreen-component `redraw-onscreen-component
    :class-map                 `class-map
    :run-on-toolkit-thread     `run-on-toolkit-thread})

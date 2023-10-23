@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
+            [clojure.data :refer [diff]]
             [retroact.algorithms.core :as ra]
             [retroact.swing :as swing])
   (:import (clojure.lang Agent Atom Ref)
@@ -63,6 +64,11 @@
 
 (declare retroact-attr-appliers)
 
+(defonce retroact-thread-id (atom -1))
+
+(defn gen-retroact-thread-id []
+  (swap! retroact-thread-id inc))
+
 (defn- capture-stack [f]
   (let [prison (Exception. "prison exception, should never be thrown")]
     (fn [& args]
@@ -83,8 +89,9 @@
 
 (defn run-on-toolkit-thread-with-result [ctx f & args]
   (let [result-chan (chan 1)]
-    (run-on-toolkit-thread ctx #(>!! result-chan (apply f args)))
-    (<!! result-chan)))
+    (run-on-toolkit-thread ctx #(>!! result-chan (let [result (apply f args)] (if (nil? result) ::nil result))))
+    (let [result (<!! result-chan)]
+      (if (not= ::nil result) result nil))))
 
 (defn redraw-onscreen-component [ctx component]
   (let [tk-redraw-onscreen-component (get-in-toolkit-config ctx :redraw-onscreen-component)]
@@ -93,6 +100,10 @@
 (defn assoc-view [ctx onscreen-component view]
   (let [tk-assoc-view (get-in-toolkit-config ctx :assoc-view)]
     (run-on-toolkit-thread ctx tk-assoc-view onscreen-component view)))
+
+(defn get-view [ctx onscreen-component]
+  (let [tk-get-view (get-in-toolkit-config ctx :get-view)]
+    (run-on-toolkit-thread-with-result ctx tk-get-view onscreen-component)))
 
 
 (defn component-applier? [attr-applier]
@@ -284,7 +295,7 @@
     ; setting the value to nil (or false).
     (doseq [attr (get-sorted-attribute-keys attr-appliers (concat (keys old-view) (keys new-view)))]
       (when-let [attr-applier (get attr-appliers attr)]
-        #_(log/info "applying attr:" attr)
+        (log/info "applying attr:" attr)
         (cond
           ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
@@ -293,14 +304,21 @@
           (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
           (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component.
-          :else (when (or (not (= (get old-view attr) (get new-view attr)))
+          :else (if (or (not (= (get old-view attr) (get new-view attr)))
                           (not (= (contains? old-view attr) (contains? new-view attr))))
-                  ; TODO: check if attr is a map for a component and apply attributes to it before calling this
-                  ; attr-applier, then pass the result to this attr-applier.
-                  #_(log/info "applying attribute" attr)
-                  (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
-                                         (assoc ctx :attr attr)
-                                         (get new-view attr))))))
+                  (do
+                    (log/info "reason for attr change? not=?" (not (= (get old-view attr) (get new-view attr))) " contains not=?" (not (= (contains? old-view attr) (contains? new-view attr))) "old nil?" (nil? (get old-view attr)) "new nil?" (nil? (get new-view attr)))
+                    #_(let [old-val (get old-view attr)
+                          new-val (get new-view attr)
+                          new-s (str old-val)
+                          old-s (str new-val)]
+                      (log/info "old attr val =" (subs new-s 0 (min (count new-s) 100)))
+                      (log/info "new attr val =" (subs old-s 0 (min (count old-s) 100)))
+                      (log/info "diff between vals" (diff old-val new-val)))
+                    (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
+                                           (assoc ctx :attr attr)
+                                           (get new-view attr)))
+                  (log/info "skipping applying attr because it is unchanged:" attr)))))
     (assoc-view ctx onscreen-component new-view))
   onscreen-component)
 
@@ -443,7 +461,7 @@
 (defn- update-onscreen-component [{:keys [onscreen-component old-view new-view] :as ctx}]
   (let [reusable (onscreen-component-reusable? ctx onscreen-component old-view new-view)
         onscreen-component (if reusable onscreen-component (instantiate-class ctx new-view))
-        ctx (if reusable ctx (dissoc ctx :old-view))]
+        ctx (if reusable ctx (assoc ctx :old-view (get-view ctx onscreen-component)))]
     (apply-attributes (assoc ctx :onscreen-component onscreen-component))
     onscreen-component))
 
@@ -605,6 +623,7 @@
 (defn- retroact-main []
   (let [retroact-cmd-chan (chan (buffer 100))
         retroact-thread (Thread. (fn retroact-main-runnable [] (retroact-main-loop retroact-cmd-chan)))]
+    (.setName retroact-thread (str "Retroact-" (gen-retroact-thread-id)))
     (.start retroact-thread)
     retroact-cmd-chan))
 

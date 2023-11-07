@@ -166,14 +166,17 @@
   (run-on-toolkit-thread ctx remove-child-at component index)
   (run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index))
 
+(defn- get-children [view attr]
+  (vec (remove nil? (get view attr))))
+
 (defn- apply-children-applier-fallback
   [attr-applier component ctx attr old-view new-view]
   (log/warn "using fallback children applier. Try setting :id on all children for better performance and robustness.")
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
         remove-child-at (:remove-child-at attr-applier)
-        old-children (get old-view attr)
-        new-children (get new-view attr)
+        old-children (get-children old-view attr)
+        new-children (get-children new-view attr)
         max-children (count new-children)]
     ; TODO: consider forcing new-children to be a vec here.
     (doseq [[old-child new-child index]
@@ -209,10 +212,12 @@
 (defn- apply-children-applier-with-ids
   [attr-applier component ctx attr old-view new-view]
   (let [{:keys [remove-child-at get-child-at add-new-child-at]} attr-applier
-        old-id->child (into {} (map (fn [child] [(:id child) child]) (get old-view attr)))
-        new-id->child (into {} (map (fn [child] [(:id child) child]) (get new-view attr)))
-        old-child-ids (mapv :id (get old-view attr))
-        new-child-ids (mapv :id (get new-view attr))
+        old-children (get-children old-view attr)
+        new-children (get-children new-view attr)
+        old-id->child (into {} (map (fn [child] [(:id child) child]) old-children))
+        new-id->child (into {} (map (fn [child] [(:id child) child]) new-children))
+        old-child-ids (mapv :id old-children)
+        new-child-ids (mapv :id new-children)
         [remove-ops insert-ops] (ra/calculate-patch-operations old-child-ids new-child-ids)
         id->component
         (loop [id->component {} remove-op (first remove-ops) remove-ops (rest remove-ops)]
@@ -228,7 +233,7 @@
             child-component (get id->component id (build-ui ctx child-view))]
         (run-on-toolkit-thread ctx add-new-child-at component child-component child-view index)))
     ; loop through all new children in view (not onscreen-component) and if there's a matching old child, then run update
-    (doseq [[{:keys [id] :as child} index] (map vector (get new-view attr) (range))]
+    (doseq [[{:keys [id] :as child} index] (map vector new-children (range))]
       (when-let [old-child-view (get old-id->child id)]
         (apply-attributes (assoc ctx
                             :onscreen-component (run-on-toolkit-thread-with-result ctx get-child-at component index)

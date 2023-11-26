@@ -1,5 +1,5 @@
 (ns retroact.core
-  (:require [clojure.core.async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
+  (:require [clojure.core.async :as async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
             [clojure.data :refer [diff]]
@@ -55,7 +55,10 @@
 
 ; TODO: remove this state and use only the state within the Retroact main loop. Use queries to asynchronously get state
 ; from the main loop.
+; Or maybe not... I just moved more of the state from the Retroact main loop to here... as an attempt to enable
+; namespace reloading without core.async errors.
 (defonce retroact-state (atom {:app-refs []
+                               :app-ref->components {}
                                :id->comp {}}))
 
 (declare build-ui)
@@ -566,8 +569,7 @@
 
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
-  (loop [chans [retroact-cmd-chan]
-         app-ref->components {}]
+  (loop [chans [retroact-cmd-chan]]
     ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here.
     (let [[val port] (alts!! chans :priority true)
           cmd-name (first val)]
@@ -577,9 +579,8 @@
         ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
         :update-view (let [[_ app-ref app-val] val
                            ctx (create-ctx app-ref app-val)
-                           components (get app-ref->components app-ref {})
-                           next-components (update-components ctx components)
-                           next-app-ref->components (assoc app-ref->components app-ref next-components)]
+                           components (get-in retroact-state [:app-ref->components app-ref] {})
+                           next-components (update-components ctx components)]
                        ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
                        ;   to be sure priority is set - I remember seeing that somewhere.
                        ; - loop through all components in current app-ref.
@@ -596,11 +597,12 @@
                        ; because the only code that would be affected by such user actions would be the code right here and since this
                        ; code is blocking until the swap! completes... there's no problem.
                        ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
-                       (recur chans next-app-ref->components))
-        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan) app-ref->components))
+                       (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
+                       (recur chans))
+        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan)))
         :add-component (let [{:keys [component app-ref app-val]} (second val)
                              ctx (create-ctx app-ref app-val)
-                             components (get app-ref->components app-ref {})
+                             components (get-in @retroact-state [:app-ref->components app-ref] {})
                              comp-id (:comp-id component)
                              component-exists (contains? components comp-id)
                              component (if component-exists
@@ -610,19 +612,19 @@
                              next-components (assoc components comp-id next-component)]
                          (when (and component-exists (:onscreen-component next-component))
                            (run-component-did-remount ctx next-component))
-                         (recur chans (assoc app-ref->components app-ref next-components)))
-        :remove-component (let [{:keys [comp-id app-ref]} (second val)
-                                next-components (dissoc (get app-ref->components app-ref) comp-id)
-                                next-app-ref->components (assoc app-ref->components app-ref next-components)]
-                            (recur chans next-app-ref->components))
+                         (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
+                         (recur chans))
+        :remove-component (let [{:keys [comp-id app-ref]} (second val)]
+                            (swap! retroact-state update-in [:app-ref->components app-ref] dissoc comp-id)
+                            (recur chans))
         :call-fn (let [[_ f args] val]
                      (apply f args)
-                     (recur chans app-ref->components))
-        :debug-output-components (do (debug-output-components app-ref->components)
-                                     (recur chans app-ref->components))
-        :shutdown (do)                                      ; do nothing, will not recur
+                     (recur chans))
+        :debug-output-components (do (debug-output-components (get retroact-state :app-ref->components))
+                                     (recur chans))
+        :shutdown (do (log/trace "SHUTTING DOWN RETROACT MAIN LOOP")) ; do nothing, will not recur
         (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)
-            (recur chans app-ref->components)))
+            (recur chans)))
       )))
 
 (defn- retroact-main []
@@ -632,7 +634,7 @@
     (.start retroact-thread)
     retroact-cmd-chan))
 
-(defonce retroact-cmd-chan (delay (retroact-main)))
+(def retroact-cmd-chan (delay (retroact-main)))
 
 (defn- alter-app-ref! [app-ref f & args]
   "Alters value of app-ref by applying f to the current value. Works on ref/atom/agent types and returns a valid value

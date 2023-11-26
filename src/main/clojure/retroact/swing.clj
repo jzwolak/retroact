@@ -14,7 +14,7 @@
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
@@ -52,6 +52,14 @@
 ; coming from) and only marks those events that are enqueued from the EDT during a retroact invocation as retroact
 ; initiated.
 (def retroact-initiated (atom 0))
+
+(defn get-scrollable-view
+  "For views that are added to a JScrollPane by default, this will get the original view from the scroll pane if c
+  is a scroll pane. Else, return c."
+  [c]
+  (if (instance? JScrollPane c)
+    (.getView (.getViewport c))
+    c))
 
 (defn redraw-onscreen-component [c]
   (.revalidate c))
@@ -427,7 +435,7 @@
 
 (defn set-row-selection-interval [c ctx [start end]]
   (if (instance? JScrollPane c)
-    (set-row-selection-interval (.getView (.getViewport c)) ctx [start end])
+    (set-row-selection-interval (get-scrollable-view c) ctx [start end])
     (if (instance? JTable c)
       (SwingUtilities/invokeLater
         #(do
@@ -447,7 +455,7 @@
 (defn- on-drag
   "When handler returns a truthy value, the value is treated as the transferable and DragSource.startDrag is called."
   [c {:keys [app-ref] :as ctx} handler]
-  (let [c (if (instance? JScrollPane c) (.getView (.getViewport c)) c)
+  (let [c (get-scrollable-view c)
         drag-source (DragSource.)
         local-ctx (assoc ctx :onscreen-component c)]
     ;(swap! object-refs assoc :drag-source drag-source)
@@ -473,8 +481,10 @@
     (log/info "drop target created... but will it be retained? Or garbage collected")))
 
 (defn- set-drag-enabled [c ctx drag-enabled]
-  (let [c (if (instance? JScrollPane c) (.getView (.getViewport c)) c)]
-    (.setDragEnabled c drag-enabled)))
+  (.setDragEnabled (get-scrollable-view c) drag-enabled))
+
+(defn- set-transfer-handler [c ctx transfer-handler]
+  (.setTransferHandler (get-scrollable-view c) transfer-handler))
 
 (defn on-property-change [c ctx property-change-handler]
   (.addPropertyChangeListener c (reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
@@ -502,7 +512,7 @@
     (.addListSelectionListener selection-model (reify-tree-list-selection-listener ctx table selection-change-handler))))
 
 (defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
-  (on-selection-change (.getView (.getViewport c)) ctx selection-change-handler))
+  (on-selection-change (get-scrollable-view c) ctx selection-change-handler))
 
 (defn on-text-change [c ctx text-change-handler]
   #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
@@ -534,8 +544,7 @@
   (if (not (instance? JScrollPane c))
     (.addMouseListener
       c (proxy-mouse-listener-click (:app-ref ctx) click-handler))
-    (let [child (.getView (.getViewport c))]
-      (on-click child ctx click-handler))))
+    (on-click (get-scrollable-view c) ctx click-handler)))
 
 
 ; *** :render and :class are reserved attributes, do not use! ***
@@ -675,6 +684,7 @@
    ; In some cases, this is the _only_ thing necessary to enable drag and drop. Also setting the :transfer-handler will
    ; expand the abilities of this approach.
    :drag-enabled           set-drag-enabled
+   :transfer-handler       set-transfer-handler
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:

@@ -375,3 +375,24 @@ connect to an nREPL server (e.g., IntelliJ has a builtin connect to nREPL run co
 You may rerun the above command as much as you like without restarting the nREPL server. You will, of course, need to
 reload any namespaces that have changed if you're editing/writing code (:reload-all may be used instead of :reload to
 facilitate this).
+
+
+# Known Issues
+
+## Drag and Drop
+
+Retroact has its own thread for running diffs on views and calculating just what needs updating and doing. When actually
+updating the onscreen components it uses the toolkit thread (EDT, in the case of Swing) to call the relevant methods
+and constructors. Furthermore, the app state may be updated on whatever thread the app considers appropriate. This
+mostly works well, but it doesn't work for all things. In the case of drag and drop there is a race condition. The app
+state may update between the time the user starts the drag and the time data is retrieved from the app state. This is
+decidedly different from the problem of the user _about_ to click on something and having it move or disappear. In this
+case the user has already clicked, appears to have grabbed the thing and starts dragging it, but in fact, another thing
+has been grabbed or nothing has been grabbed. This may be ok if the thing being dragged is displayed in a
+distinguishable form (like a file name or image icon) so the user knows they did not get the thing they intended to get.
+
+Perhaps applications need to lock the drag source view when something is running that may update the view. Rather,
+disable dragging from that view and indicate it is not available for dragging.
+
+Still, there are three threads involved here: the toolkit thread, Retroact thread, and whatever thread the application
+has designated for app state changes. This may cause problems for other functionality besides drag and drop.

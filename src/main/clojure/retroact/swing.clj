@@ -10,10 +10,11 @@
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException Atom)
-           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font Toolkit)
+           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit)
+           (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
@@ -35,9 +36,13 @@
 ; Or maybe
 ;   ctx event optional-data
 ; where ctx contains app-ref, app-val, onscreen-component, and potentially old-view, new-view (or just view).
+;
+; I prefer the second: ctx, event, optional-data
 
 
 (def client-prop-prefix "retroact-")
+
+(defonce object-refs (atom {}))
 
 ; This holds a number for retroact initiated invocations on the EDT. Each invocation increments this value on start and
 ; decrements on finish. This allows other events enqueued on the event queue to be marked as initiated by Retroact.
@@ -212,6 +217,22 @@
     (doseq [k missing-keys] (.putClientProperty c k nil))
     (doseq [[k v] properties] (.putClientProperty c k v))))
 
+(defn- set-constraints
+  "Attempt to update layout constraints for the component. This isn't possible for all layouts."
+  [c ctx constraints]
+  (try
+    (let [layout-manager
+          (-> (.getParent c)
+              (.getLayout))]
+      (condp instance? layout-manager
+        BorderLayout (.addLayoutComponent layout-manager c constraints)
+        GridBagLayout (.setConstraints layout-manager c constraints)
+        MigLayout (.setComponentConstraints layout-manager c constraints)
+        ))
+    (catch Exception e
+      ; ignore
+      )))
+
 (defn set-width [c ctx width]
   (let [view-width (get-in ctx [:old-view :width])
         onscreen-width (.getWidth c)
@@ -331,6 +352,7 @@
    :split-pane                 JSplitPane
    :tabbed-pane                JTabbedPane
    :table                      create-jtable
+   :text-area                  JTextArea
    :text-field                 JTextField
    :toggle-button              JToggleButton
    :tool-bar                   JToolBar
@@ -422,6 +444,38 @@
 (defn on-component-hidden [c ctx handler]
   (.addComponentListener c (reify-component-hidden-listener (fn [ce] (handler ctx ce)))))
 
+(defn- on-drag
+  "When handler returns a truthy value, the value is treated as the transferable and DragSource.startDrag is called."
+  [c {:keys [app-ref] :as ctx} handler]
+  (let [c (if (instance? JScrollPane c) (.getView (.getViewport c)) c)
+        drag-source (DragSource.)
+        local-ctx (assoc ctx :onscreen-component c)]
+    ;(swap! object-refs assoc :drag-source drag-source)
+    (log/info "connecting on-drag handler")
+    (log/info "object-refs =" @object-refs)
+    (log/info "component for drag source:" c)
+    ;TODO: allow the user to decide what DnD action to use. Defaulting to ACTION_COPY now.
+    (.createDefaultDragGestureRecognizer
+      drag-source c DnDConstants/ACTION_COPY
+      (reify DragGestureListener
+        (dragGestureRecognized [this drag-gesture-event]
+          (log/info "retroact recognizing drag gesture")
+          (when-let [transferable (handler (assoc local-ctx :app-val @app-ref) drag-gesture-event)]
+            (.startDrag drag-gesture-event DragSource/DefaultCopyDrop transferable (proxy [DragSourceAdapter] []))))))))
+
+(defn- on-drag-over [c ctx handler])
+
+(defn- on-drop [c {:keys [app-ref] :as ctx} handler]
+  (let [local-ctx (assoc ctx :onscreen-component c)
+        drop-target (DropTarget. c DnDConstants/ACTION_COPY
+                                 (proxy [DropTargetAdapter] []
+                                   (drop [drop-event] (handler (assoc local-ctx :app-val @app-ref) drop-event))))]
+    (log/info "drop target created... but will it be retained? Or garbage collected")))
+
+(defn- set-drag-enabled [c ctx drag-enabled]
+  (let [c (if (instance? JScrollPane c) (.getView (.getViewport c)) c)]
+    (.setDragEnabled c drag-enabled)))
+
 (defn on-property-change [c ctx property-change-handler]
   (.addPropertyChangeListener c (reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
 
@@ -494,6 +548,7 @@
    :color                  (fn set-color [c ctx color ] (cond
                                                          (instance? RootPaneContainer c) (.setForeground (.getContentPane c) (create-color color))
                                                          :else (.setForeground c (create-color color))))
+   :constraints            set-constraints
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
@@ -516,6 +571,7 @@
                                    (cond
                                      (instance? RootPaneContainer c) (.getLayout (.getContentPane c))
                                      :else (.getLayout c)))}
+   :line-wrap              (fn set-line-wrap [c ctx line-wrap] (.setLineWrap c line-wrap))
    :name                   (fn set-name [c ctx name] (.setName c name))
    :opaque                 (fn set-opaque [c ctx opaque] (cond
                                                            (instance? RootPaneContainer c) (.setOpaque (.getContentPane c) opaque)
@@ -610,6 +666,15 @@
                             :add-new-child-at      mb/add-new-child-at
                             :remove-child-at       mb/remove-child-at
                             :get-child-at          mb/get-child-at}
+   ; Drag and Drop
+   ; :on-drag, :on-drag-over, and :on-drop may be used together to implement drag and drop, however, another way exists.
+   ; See :drag-enabled
+   :on-drag                on-drag
+   :on-drag-over           on-drag-over
+   :on-drop                on-drop
+   ; In some cases, this is the _only_ thing necessary to enable drag and drop. Also setting the :transfer-handler will
+   ; expand the abilities of this approach.
+   :drag-enabled           set-drag-enabled
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:

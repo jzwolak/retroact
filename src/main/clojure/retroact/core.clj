@@ -275,7 +275,7 @@
           (do (log/warn "could not order attribute appliers. Circular dependence found. Returning all appliers anyway.")
               (into sorted-attrs unsorted-attrs))
           (do
-            (log/info "sorted-attrs:" sorted-attrs)
+            #_(log/info "sorted-attrs:" sorted-attrs)
             sorted-attrs))))))
 
 (defn- default-applier-fn [c ctx v])
@@ -303,7 +303,6 @@
     ; setting the value to nil (or false).
     (doseq [attr (get-sorted-attribute-keys attr-appliers (concat (keys old-view) (keys new-view)))]
       (when-let [attr-applier (get attr-appliers attr)]
-        (log/info "applying attr:" attr)
         (cond
           ; TODO: mutual recursion here could cause stack overflow for deeply nested UIs? Will a UI ever be that deeply
           ; nested?? Still... I could use trampoline and make this the last statement. Though trampoline may not help
@@ -579,7 +578,7 @@
         ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
         :update-view (let [[_ app-ref app-val] val
                            ctx (create-ctx app-ref app-val)
-                           components (get-in retroact-state [:app-ref->components app-ref] {})
+                           components (get-in @retroact-state [:app-ref->components app-ref] {})
                            next-components (update-components ctx components)]
                        ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
                        ;   to be sure priority is set - I remember seeing that somewhere.
@@ -620,7 +619,7 @@
         :call-fn (let [[_ f args] val]
                      (apply f args)
                      (recur chans))
-        :debug-output-components (do (debug-output-components (get retroact-state :app-ref->components))
+        :debug-output-components (do (debug-output-components (get @retroact-state :app-ref->components))
                                      (recur chans))
         :shutdown (do (log/trace "SHUTTING DOWN RETROACT MAIN LOOP")) ; do nothing, will not recur
         (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)

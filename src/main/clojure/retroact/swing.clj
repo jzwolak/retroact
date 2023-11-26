@@ -77,7 +77,7 @@
                                                   (fn []
                                                     (apply f args)
                                                     (when (instance? Atom (first args))
-                                                      (log/info "got atom on toolkit thread with val:" @(first args)))
+                                                      (log/trace "got atom on toolkit thread with val:" @(first args)))
                                                     ))))
 
 (defn run-on-toolkit-thread [f & args]

@@ -314,18 +314,9 @@
           :else (if (or (not (= (get old-view attr) (get new-view attr)))
                           (not (= (contains? old-view attr) (contains? new-view attr))))
                   (do
-                    (log/info "reason for attr change? not=?" (not (= (get old-view attr) (get new-view attr))) " contains not=?" (not (= (contains? old-view attr) (contains? new-view attr))) "old nil?" (nil? (get old-view attr)) "new nil?" (nil? (get new-view attr)))
-                    #_(let [old-val (get old-view attr)
-                          new-val (get new-view attr)
-                          new-s (str old-val)
-                          old-s (str new-val)]
-                      (log/info "old attr val =" (subs new-s 0 (min (count new-s) 100)))
-                      (log/info "new attr val =" (subs old-s 0 (min (count old-s) 100)))
-                      (log/info "diff between vals" (diff old-val new-val)))
                     (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
                                            (assoc ctx :attr attr)
-                                           (get new-view attr)))
-                  (log/info "skipping applying attr because it is unchanged:" attr)))))
+                                           (get new-view attr)))))))
     (assoc-view ctx onscreen-component new-view))
   onscreen-component)
 

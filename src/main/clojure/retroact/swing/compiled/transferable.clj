@@ -2,7 +2,12 @@
   (:import (clojure.lang IPersistentMap)
            (java.awt.datatransfer DataFlavor UnsupportedFlavorException)))
 
+(def default-data-flavor (delay (DataFlavor. (str DataFlavor/javaJVMLocalObjectMimeType ";class=" (.getName IPersistentMap)))))
+
 (gen-class
+  ;; RTransferable supports drag and drop operations between Swing components. This is designed to support transferring
+  ;; Clojure data structures using the IPersistentMap interface with a convenience method for retrieving the data:
+  ;; getData.
   :name "retroact.swing.compiled.transferable.RTransferable"
   :implements [java.awt.datatransfer.Transferable]
   :state "state"
@@ -11,8 +16,8 @@
   :prefix "transfer-handler-"
   :constructors {[clojure.lang.IPersistentMap] []}
   ;:methods
-  #_[[getTransferData [DataFlavor] Object]
-   [getTransferDataFlavors [] "[Ljava.awt.datatransfer.DataFlavor;"]])
+  [[getData [] Object]
+   [getDefaultFlavor [] java.awt.datatransfer.DataFlavor]])
 
 (defn- get-data-as-string [data]
   (str data))
@@ -21,8 +26,7 @@
   data)
 
 (def data-flavors (delay {DataFlavor/stringFlavor get-data-as-string
-                          (DataFlavor. (str DataFlavor/javaJVMLocalObjectMimeType ";class=" (.getName IPersistentMap)))
-                          get-data-as-map}))
+                          @default-data-flavor get-data-as-map}))
 
 (defn transfer-handler-init [data]
   [[] {:data data}])
@@ -39,3 +43,12 @@
 
 (defn transfer-handler-isDataFlavorSupported [this data-flavor]
   (contains? @data-flavors data-flavor))
+
+(defn transfer-handler-getData
+  "Get data using default flavor (from getDefaultFlavor)."
+  [this]
+  (.getTransferData this (.getDefaultFlavor this)))
+
+(defn transfer-handler-getDefaultFlavor
+  [this]
+  @default-data-flavor)

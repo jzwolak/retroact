@@ -83,7 +83,11 @@
             (throw rex)))))))
 
 (defn get-in-toolkit-config [ctx k]
-  @(resolve (get-in ctx [:app-val :retroact :toolkit-config k])))
+  (if-let [unresolved-symbol (get-in ctx [:app-val :retroact :toolkit-config k])]
+    @(resolve unresolved-symbol)
+    (do
+      (log/warn "could not resolve toolkit-config symbol for key" k)
+      (log/warn "is app state initialized?"))))
 
 (defn run-on-toolkit-thread [ctx f & args]
   (let [tk-run-on-toolkit-thread (get-in-toolkit-config ctx :run-on-toolkit-thread)

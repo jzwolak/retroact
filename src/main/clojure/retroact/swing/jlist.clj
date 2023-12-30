@@ -1,4 +1,5 @@
 (ns retroact.swing.jlist
+  (:require [clojure.tools.logging :as log])
   (:import (javax.swing DefaultListModel JList ListCellRenderer)))
 
 

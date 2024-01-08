@@ -1,6 +1,7 @@
 (ns retroact.swing.compiled.jtree
   (:require [clojure.tools.logging :as log])
   (:import (java.awt EventQueue)
+           (java.awt.event ComponentAdapter HierarchyEvent HierarchyListener)
            (java.util UUID)
            (javax.swing SwingUtilities)
            (javax.swing.event TreeModelEvent)
@@ -24,7 +25,8 @@
             [setModelFn [clojure.lang.IFn] void]
             [setRenderFn [clojure.lang.IFn] void]
             [setTreeComponent [javax.swing.JTree] void]
-            [setSelectionFn [clojure.lang.IFn] void]])
+            [setSelectionFn [clojure.lang.IFn] void]
+            [setScrollPathFn [clojure.lang.IFn] void]])
 
 (gen-class
   :name "retroact.swing.compiled.jtree.RTreeCellRenderer"
@@ -42,12 +44,39 @@
     (doseq [path-part (.getPath tree-path)]
       (log/info "    part:" path-part))))
 
+(defn- scroll-path-to-visible [tree-component state]
+  (let [tree-scroll-path (:tree-scroll-path state)]
+    (when tree-scroll-path
+      (.scrollPathToVisible tree-component (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path))))))
+
+(defn- create-component-listener [tree-model]
+  (proxy [ComponentAdapter] []
+    (componentResized [component-event]
+      (log/info "JTree component resized")
+      (let [state @(.state tree-model)
+            tree-component (:tree-component state)]
+        (scroll-path-to-visible tree-component state)))))
+
+(defn- create-hierarchy-listener [tree-model]
+  (proxy [Object HierarchyListener] []
+    (hierarchyChanged [hierarchy-event]
+      (when-not (zero? (bit-and HierarchyEvent/PARENT_CHANGED (.getChangeFlags hierarchy-event)))
+       (let [state @(.state tree-model)
+             tree-component (:tree-component state)
+             parent (.getChangedParent hierarchy-event)
+             component-listener (:component-listener state)]
+          (if (nil? (.getParent tree-component))
+            (.removeComponentListener parent component-listener)
+            (.addComponentListener parent component-listener)))))))
+
 (defn- tree-model-watch
   [this _key _ref old-value new-value]
   (let [old-tree (:tree old-value)
         new-tree (:tree new-value)
         old-tree-selection (:tree-selection old-value)
         new-tree-selection (:tree-selection new-value)
+        old-tree-scroll-path (:tree-scroll-path old-value)
+        new-tree-scroll-path (:tree-scroll-path new-value)
         tree-component (:tree-component new-value)
         listeners (:listeners new-value)]
     (when (not (SwingUtilities/isEventDispatchThread))
@@ -63,7 +92,9 @@
                              new-tree-selection)]
         #_(print-tree-paths "would be tree-path:" tree-paths)
         #_(print-tree-paths "actual   tree-path:" (.getSelectionPaths tree-component))
-        (.setSelectionPaths tree-component (into-array TreePath tree-paths))))))
+        (.setSelectionPaths tree-component (into-array TreePath tree-paths))))
+    (when (not= old-tree-scroll-path new-tree-scroll-path)
+      (scroll-path-to-visible tree-component new-value))))
 
 (defn rtree-model-init-state []
   (let [tree-root (str (UUID/randomUUID))
@@ -79,12 +110,17 @@
     [[] state]))
 
 (defn rtree-model-post-init [this & _]
-  (add-watch (.state this) :tree-model-self-watch (partial tree-model-watch this)))
+  (add-watch (.state this) :tree-model-self-watch (partial tree-model-watch this)) )
 
 (defn- update-tree-selection [{:keys [data tree tree-root tree-selection tree-selection-fn] :as state}]
   (if tree-selection-fn
     (assoc state :tree-selection (tree-selection-fn tree-root tree data))
     (dissoc state :tree-selection)))
+
+(defn- update-tree-scroll-path [{:keys [data tree tree-root tree-scroll-path-fn] :as state}]
+  (if tree-scroll-path-fn
+    (assoc state :tree-scroll-path (tree-scroll-path-fn tree-root tree data))
+    (dissoc state :tree-scroll-path)))
 
 (defn- update-tree
   [state]
@@ -94,7 +130,8 @@
           [tree-root tree] (tree-model-fn (:tree-root state) data)]
       (assoc state :tree tree
                    :tree-root tree-root))
-    (update-tree-selection)))
+    (update-tree-selection)
+    (update-tree-scroll-path)))
 
 (defn- update-data [state data]
   (if (= (:data state) data)
@@ -170,9 +207,24 @@
   [this selection-fn]
   (swap! (.state this) assoc :tree-selection-fn selection-fn))
 
+(defn rtree-model-setScrollPathFn
+  [this scroll-path-fn]
+  (swap! (.state this) assoc :tree-scroll-path-fn scroll-path-fn))
+
 (defn rtree-model-setTreeComponent
   [this tree-component]
-  (swap! (.state this) assoc :tree-component tree-component))
+  (let [state @(.state this)
+        old-tree-component (:tree-component state)
+        component-listener (get state :component-listener (create-component-listener this))
+        hierarchy-listener (get state :hierarchy-listener (create-hierarchy-listener this))]
+    (when old-tree-component
+      (.removeHierarchyListener old-tree-component hierarchy-listener))
+    (log/info "adding component listener for JTree")
+    (.addHierarchyListener tree-component hierarchy-listener)
+    (swap! (.state this) assoc
+           :tree-component tree-component
+           :component-listener component-listener
+           :hierarchy-listener hierarchy-listener)))
 
 (defn- set-icon [cell-renderer icon]
   (.setClosedIcon cell-renderer icon)

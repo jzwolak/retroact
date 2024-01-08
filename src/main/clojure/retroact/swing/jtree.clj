@@ -21,6 +21,10 @@
   [c ctx tree-selection-fn]
   (safe-tree-model-set c (memfn setSelectionFn tree-selection-fn) tree-selection-fn))
 
+(defn set-tree-scroll-path-fn
+  [c ctx tree-scroll-path-fn]
+  (safe-tree-model-set c (memfn setScrollPathFn tree-scroll-path-fn) tree-scroll-path-fn))
+
 (defn set-tree-model-fn
   [c ctx tree-model-fn]
   (safe-tree-model-set c (memfn setModelFn tree-model-fn) tree-model-fn))

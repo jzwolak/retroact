@@ -6,7 +6,7 @@
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
-                                          set-tree-toggle-click-count set-tree-selection-fn]]
+                                          set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException Atom)
@@ -14,7 +14,7 @@
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
@@ -77,14 +77,15 @@
                                                   (fn []
                                                     (apply f args)
                                                     (when (instance? Atom (first args))
-                                                      (log/trace "got atom on toolkit thread with val:" @(first args)))
+                                                      #_(log/trace "got atom on toolkit thread with val:" @(first args)))
                                                     ))))
 
 (defn run-on-toolkit-thread [f & args]
   (run-on-toolkit-thread-internal swap! retroact-initiated inc)
   (apply run-on-toolkit-thread-internal f args)
   ; Double invoke later on toolkit thread is necessary to capture secondary events caused by f.
-  (run-on-toolkit-thread-internal #(SwingUtilities/invokeLater (fn [] (swap! retroact-initiated dec) (log/info "got atom on toolkit thread with val:" @retroact-initiated "after dec")))))
+  (run-on-toolkit-thread-internal #(SwingUtilities/invokeLater (fn [] (swap! retroact-initiated dec)
+                                                                 #_(log/info "got atom on toolkit thread with val:" @retroact-initiated "after dec")))))
 
 
 (defn retroact-initiated?
@@ -173,7 +174,7 @@
 
 (defn proxy-window-listener-close [app-ref onscreen-component handler]
   (proxy [WindowAdapter] []
-    (windowClosed [window-event]
+    (windowClosing [window-event]
       (handler app-ref onscreen-component window-event))))
 
 (defn proxy-mouse-listener-click [app-ref click-handler]
@@ -241,6 +242,9 @@
       ; ignore
       )))
 
+(defn- set-title [c ctx title]
+  (.setTitle c title))
+
 (defn set-width [c ctx width]
   (let [view-width (get-in ctx [:old-view :width])
         onscreen-width (.getWidth c)
@@ -260,7 +264,9 @@
 (defn set-on-close [c ctx action]
   (if (contains? on-close-action-map action)
     (.setDefaultCloseOperation c (on-close-action-map action))
-    (.addWindowListener c (proxy-window-listener-close (:app-ref ctx) c action))))
+    (do
+      (.setDefaultCloseOperation c WindowConstants/DO_NOTHING_ON_CLOSE)
+      (.addWindowListener c (proxy-window-listener-close (:app-ref ctx) c action)))))
 
 
 ; :contents fns
@@ -602,6 +608,7 @@
                                ; shouldn't be necessary, I think.
                                (when (text-changed? old-text new-text)
                                  (.setText c new-text))))
+   :title                  set-title
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
@@ -651,6 +658,7 @@
    :tree-render-fn         set-tree-render-fn
    :tree-model-fn          set-tree-model-fn
    :tree-selection-fn      set-tree-selection-fn
+   :tree-scroll-path-fn    set-tree-scroll-path-fn
    :tree-data              set-tree-data
    :toggle-click-count     set-tree-toggle-click-count
 

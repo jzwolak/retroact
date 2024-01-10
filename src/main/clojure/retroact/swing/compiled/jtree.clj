@@ -244,4 +244,7 @@
             (set-icon this (:icon rendered-value))
             (set-icon this nil))
           (.superGetTreeCellRendererComponent this tree (:value rendered-value) selected expanded leaf row has-focus))
-      )))
+      :else
+      (do
+        (log/warn "rtree-cell-renderer got unrecognized type " (type rendered-value) " with value " rendered-value)
+        (.superGetTreeCellRendererComponent this tree "<unrecognized>" selected expanded leaf row has-focus)))))

@@ -1,3 +1,5 @@
 .gradle
 build
 **/.nrepl-port
+.DS_Store
+.idea

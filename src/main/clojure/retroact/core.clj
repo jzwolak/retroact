@@ -112,6 +112,14 @@
   (let [tk-get-view (get-in-toolkit-config ctx :get-view)]
     (run-on-toolkit-thread-with-result ctx tk-get-view onscreen-component)))
 
+(defn assoc-ctx [ctx onscreen-component]
+  (let [tk-assoc-ctx (get-in-toolkit-config ctx :assoc-ctx)]
+    (run-on-toolkit-thread ctx tk-assoc-ctx onscreen-component ctx)))
+
+(defn get-ctx [ctx onscreen-component]
+  (let [tk-get-ctx (get-in-toolkit-config ctx :get-ctx)]
+    (run-on-toolkit-thread-with-result ctx tk-get-ctx onscreen-component)))
+
 
 (defn component-applier? [attr-applier]
   (and (map? attr-applier)
@@ -303,6 +311,7 @@
   #_(log/info "applying attributes" (:class new-view) "log msg3")
   #_(log/info "onscreen-component class =" (class onscreen-component))
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
+    (assoc-ctx (assoc ctx :view old-view) onscreen-component)
     ; Use old-view and new-view to get attribute keys because a key may be removed and that will be treated like
     ; setting the value to nil (or false).
     (doseq [attr (get-sorted-attribute-keys attr-appliers (concat (keys old-view) (keys new-view)))]
@@ -321,7 +330,10 @@
                     (run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
                                            (assoc ctx :attr attr)
                                            (get new-view attr)))))))
-    (assoc-view ctx onscreen-component new-view))
+    ; Some code relies on the value of view to be the old view until attr appliers complete. But eventually it'd be
+    ; nice to remove this in favor of assoc-ctx
+    (assoc-view ctx onscreen-component new-view)
+    (assoc-ctx (assoc ctx :view new-view) onscreen-component))
   onscreen-component)
 
 (defn instantiate-class

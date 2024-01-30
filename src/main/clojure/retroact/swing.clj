@@ -53,6 +53,16 @@
 ; initiated.
 (def retroact-initiated (atom 0))
 
+(def get-view)
+(def get-ctx)
+
+(defn create-handler-context [ctx onscreen-component]
+  ; ctx from onscreen-component has :old-view, :new-view, and :view, where :view is equal to either :old-view or
+  ; :new-view depending on if an update is running or finished, respectively.
+  (assoc (merge ctx (get-ctx onscreen-component))
+    :onscreen-component onscreen-component
+    :app-val @(:app-ref ctx)))
+
 (defn get-scrollable-view
   "For views that are added to a JScrollPane by default, this will get the original view from the scroll pane if c
   is a scroll pane. Else, return c."
@@ -131,6 +141,16 @@
         :else (recur (.getParent oc))))))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
+
+(defn assoc-ctx [onscreen-component ctx]
+  (set-client-prop onscreen-component "ctx" ctx))
+
+(defn get-ctx [onscreen-component]
+  (let [ctx (if onscreen-component (get-client-prop onscreen-component "ctx"))]
+    (cond
+      ctx ctx
+      (nil? onscreen-component) nil
+      :else (recur (.getParent onscreen-component)))))
 
 (def on-close-action-map
   {:dispose JFrame/DISPOSE_ON_CLOSE
@@ -244,6 +264,9 @@
 
 (defn- set-title [c ctx title]
   (.setTitle c title))
+
+(defn- set-tool-tip-text [c ctx tool-tip-text]
+  (.setToolTipText c tool-tip-text))
 
 (defn set-width [c ctx width]
   (let [view-width (get-in ctx [:old-view :width])
@@ -366,7 +389,7 @@
    :split-pane                 JSplitPane
    :tabbed-pane                JTabbedPane
    :table                      create-jtable
-   :text-area                  JTextArea
+   :text-area                  create/create-jtext-area
    :text-field                 JTextField
    :toggle-button              JToggleButton
    :tool-bar                   JToolBar
@@ -527,11 +550,14 @@
                         (reify-document-listener-to-text-change-listener
                           (fn text-change-handler-clojure [doc-event]
                             (try
-                              (text-change-handler (:app-ref ctx) c doc-event (.getText c))
-                              (catch ArityException ae
-                                (log/warn "two arg version of :on-text-change handler deprecated, please update to"
-                                          "four args with the component and doc-event as the second and third args")
-                                (text-change-handler (:app-ref ctx) (.getText c))))))))
+                              (text-change-handler (create-handler-context ctx c) doc-event (.getText c))
+                              (catch ArityException ae1
+                                (log/warn "two and four arg version of :on-text-change handler deprecated, please update to"
+                                          "three args with the context, doc-event, and new text as the args")
+                                (try
+                                  (text-change-handler (:app-ref ctx) c doc-event (.getText c))
+                                  (catch ArityException ae
+                                    (text-change-handler (:app-ref ctx) (.getText c))))))))))
 
 (defn on-set-value-at
   "The set-value-at-handler has args [app-ref old-item new-value row col] where row and col are the row and column of
@@ -567,6 +593,7 @@
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
+   :editable               (fn set-editable [c ctx editable] (.setEditable c editable))
    :enabled                (fn set-enabled [c ctx enabled]
                              (log/info ".setEnabled to" (boolean enabled) "with raw val" enabled "on" c)
                              (.setEnabled c ^boolean (boolean enabled)))
@@ -609,6 +636,7 @@
                                (when (text-changed? old-text new-text)
                                  (.setText c new-text))))
    :title                  set-title
+   :tool-tip-text          set-tool-tip-text
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
@@ -711,6 +739,8 @@
   {:attr-appliers             `attr-appliers
    :assoc-view                `assoc-view
    :get-view                  `get-view
+   :assoc-ctx                 `assoc-ctx
+   :get-ctx                   `get-ctx
    :redraw-onscreen-component `redraw-onscreen-component
    :class-map                 `class-map
    :run-on-toolkit-thread     `run-on-toolkit-thread})

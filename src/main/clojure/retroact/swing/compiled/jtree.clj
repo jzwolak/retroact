@@ -52,7 +52,7 @@
 (defn- create-component-listener [tree-model]
   (proxy [ComponentAdapter] []
     (componentResized [component-event]
-      (log/info "JTree component resized")
+      #_(log/info "JTree component resized")
       (let [state @(.state tree-model)
             tree-component (:tree-component state)]
         (scroll-path-to-visible tree-component state)))))

@@ -37,7 +37,8 @@
 ;   ctx event optional-data
 ; where ctx contains app-ref, app-val, onscreen-component, and potentially old-view, new-view (or just view).
 ;
-; I prefer the second: ctx, event, optional-data
+; I prefer the second: ctx, event, optional-data. Perhaps even put optional-data in the ctx as :data or whatever. Doing
+; so would create a uniform 2-arg handler interface.
 
 
 (def client-prop-prefix "retroact-")
@@ -385,6 +386,7 @@
    :menu-item                  JMenuItem
    :mig-layout                 MigLayout
    :panel                      JPanel
+   :option-pane                create/create-joption-pane
    :separator                  JSeparator
    :split-pane                 JSplitPane
    :tabbed-pane                JTabbedPane

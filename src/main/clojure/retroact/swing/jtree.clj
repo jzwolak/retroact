@@ -48,4 +48,4 @@
     (.setCellRenderer tree (RTreeCellRenderer.))
     (.setRootVisible tree false)
     (.setShowsRootHandles tree true)
-    (JScrollPane. tree)))
+    tree))

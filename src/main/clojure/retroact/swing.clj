@@ -144,6 +144,7 @@
 (defn- get-view-or-identity [c] (or (get-view c) c))
 
 (defn assoc-ctx [onscreen-component ctx]
+  #_(log/info "assoc-ctx, ctx :new-view =" (:new-view ctx))
   (set-client-prop onscreen-component "ctx" ctx))
 
 (defn get-ctx [onscreen-component]
@@ -310,6 +311,8 @@
     (mapv #(.getTabComponentAt tabbed-pane %) (range 0 num-tabs))))
 (defmethod get-existing-children JMenu [menu]
   (.getMenuComponents menu))
+(defmethod get-existing-children JScrollPane [_]
+  (log/error "cannot get children for JScrollPane"))
 
 (defmulti add-new-child-at (fn [container child _ _] (class container)))
 (defmethod add-new-child-at Container [^Container c ^Component child view index]
@@ -328,6 +331,8 @@
     (.insertTab tabbed-pane title icon child tooltip index)))
 (defmethod add-new-child-at JMenu [menu child view index]
   (.add ^JMenu menu ^Component child ^int index))
+(defmethod add-new-child-at JScrollPane [_ child _ _]
+  (log/error "cannot add child to JScrollPane" child))
 
 (defmulti remove-child-at (fn [container index] (class container)))
 (defmethod remove-child-at Container [c index] (.remove c index))
@@ -339,6 +344,8 @@
   (.removeTabAt tabbed-pane index))
 (defmethod remove-child-at JMenu [menu index]
   (.remove menu ^int index))
+(defmethod remove-child-at JScrollPane [_ index]
+  (log/error "cannot remove child from JScrollPane. index =" index))
 
 (defmulti get-child-at (fn [container index] (class container)))
 (defmethod get-child-at Container [c index] (.getComponent c index))
@@ -353,6 +360,8 @@
     child))
 (defmethod get-child-at JTabbedPane [tabbed-pane index] (.getComponentAt tabbed-pane index))
 (defmethod get-child-at JMenu [menu index] (.getMenuComponent menu index))
+(defmethod get-child-at JScrollPane [_ index]
+  (log/error "cannot get child from JScrollPane. index =" index))
 ; end :contents fns
 
 
@@ -387,6 +396,7 @@
    :mig-layout                 MigLayout
    :panel                      JPanel
    :option-pane                create/create-joption-pane
+   :scroll-pane                JScrollPane
    :separator                  JSeparator
    :split-pane                 JSplitPane
    :tabbed-pane                JTabbedPane
@@ -639,6 +649,8 @@
                                  (.setText c new-text))))
    :title                  set-title
    :tool-tip-text          set-tool-tip-text
+   :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
+                            :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))

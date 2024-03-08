@@ -72,15 +72,21 @@
 (defn gen-retroact-thread-id []
   (swap! retroact-thread-id inc))
 
-(defn- capture-stack [f]
-  (let [prison (Exception. "prison exception, should never be thrown")]
+(defn- handle-uncaught-exception [ex]
+  (let [current-thread (Thread/currentThread)
+        uncaught-ex-handler (.getUncaughtExceptionHandler current-thread)]
+    (.uncaughtException uncaught-ex-handler current-thread ex)))
+
+(defn- capture-stack [ctx f]
+  (let [prison (RuntimeException. "captured stack")]
     (fn [& args]
       (try
         (apply f args)
         (catch Exception cause
-          (let [rex (RuntimeException. "captured stack" cause)]
-            (.setStackTrace rex (.getStackTrace prison))
-            (throw rex)))))))
+          (.initCause prison cause)
+          (log/error ":view =" (:view ctx))
+          (log/error ":new-view =" (:new-view ctx))
+          (throw prison))))))
 
 (defn get-in-toolkit-config [ctx k]
   (if-let [unresolved-symbol (get-in ctx [:app-val :retroact :toolkit-config k])]
@@ -91,14 +97,22 @@
 
 (defn run-on-toolkit-thread [ctx f & args]
   (let [tk-run-on-toolkit-thread (get-in-toolkit-config ctx :run-on-toolkit-thread)
-        f-in-stack-prison (capture-stack f)]
+        f-in-stack-prison (capture-stack ctx f)]
     (apply tk-run-on-toolkit-thread f-in-stack-prison args)))
 
 (defn run-on-toolkit-thread-with-result [ctx f & args]
   (let [result-chan (chan 1)]
-    (run-on-toolkit-thread ctx #(>!! result-chan (let [result (apply f args)] (if (nil? result) ::nil result))))
-    (let [result (<!! result-chan)]
-      (if (not= ::nil result) result nil))))
+    (run-on-toolkit-thread
+      ctx
+      (fn []
+        (let [result (try [::success (apply f args)]
+                          (catch Exception ex
+                            [::exception ex]))]
+          (>!! result-chan result))))
+    (let [[result-status result-value] (<!! result-chan)]
+      (cond
+        (= result-status ::exception) (throw (Exception. "exception thrown while running on toolkit thread" result-value))
+        :else result-value))))
 
 (defn redraw-onscreen-component [ctx component]
   (let [tk-redraw-onscreen-component (get-in-toolkit-config ctx :redraw-onscreen-component)]
@@ -351,7 +365,9 @@
          (instance? Class class-or-fn)
          (.newInstance (.getConstructor class-or-fn (into-array Class [])) (into-array Object []))
          (fn? class-or-fn) (class-or-fn ui)
-         :else (log/error "no class or fn found to create component!")))
+         (fn? @class-or-fn) (@class-or-fn ui)
+         :else (do (log/error "no class or fn found to create component! id =" id)
+                   (throw (Exception. (str "no class or fn found to create component with id = " id ". Must have a fn, var/symbol referencing a fn, or a Class with no arg constructor. Got " class-or-fn))))))
     ))
 
 ; TODO: perhaps build-ui is more like build-object because :mig-layout is not a UI. And the way things are setup,
@@ -391,9 +407,7 @@
   (try
       (apply fn args)
       (catch Exception ex
-        (let [current-thread (Thread/currentThread)
-              uncaught-ex-handler (.getUncaughtExceptionHandler current-thread)]
-          (.uncaughtException uncaught-ex-handler current-thread ex)))))
+        (handle-uncaught-exception ex))))
 
 
 (defn- call-side-effects [app-ref old-value new-value]
@@ -558,7 +572,7 @@
         (log/info "got comp:" (.get weak-ref))
         (.get weak-ref))
       (do
-        (log/info "weak-ref is nil? " weak-ref))
+        (log/info "weak-ref is nil? " (nil? weak-ref)))
       )))
 
 (defn- debug-output-components [app-ref->components]
@@ -573,65 +587,87 @@
                                              retroact-attr-appliers))]
     ctx))
 
-(defn- retroact-main-loop [retroact-cmd-chan]
-  (log/trace "STARTING RETROACT MAIN LOOP")
-  (loop [chans [retroact-cmd-chan]]
-    ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here.
-    (let [[val port] (alts!! chans :priority true)
-          cmd-name (first val)]
-      (condp = cmd-name
-        ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
-        ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
-        ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
-        :update-view (let [[_ app-ref app-val] val
+(defn- execute-main-loop-single-iteration [chans]
+  ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here because
+  ; the chan for each app-ref has a sliding buffer of 1 - only the most recent update is taken (and necessary, since
+  ; pure fns are supposed to be used to render view from state).
+  (let [[val port] (alts!! chans :priority true)
+        cmd-name (first val)]
+    (condp = cmd-name
+      ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
+      ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
+      ; of the mechanics of Swing - i.e., so that it will work with other toolkits, like JavaFX, SWT, etc..
+      :update-view (let [[_ app-ref app-val] val
+                         ctx (create-ctx app-ref app-val)
+                         components (get-in @retroact-state [:app-ref->components app-ref] {})
+                         next-components (update-components ctx components)]
+                     ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
+                     ;   to be sure priority is set - I remember seeing that somewhere.
+                     ; - loop through all components in current app-ref.
+                     ; update-view-chan has app-ref for the app at the other end of it. There is one update-view-chan per app.
+                     ;
+                     ; No worries about map running outside swap!. The :view inside :components vector is only updated in this
+                     ; place and this place is sequential. In addition, changes to :state will always trigger another put to
+                     ; update-view-chan, which will cause this code to run again. In the worst case the code runs an extra time,
+                     ; not too few times.
+                     ; TODO: update docs. In fact, running the map outside swap! is critical. Because I want to update view and
+                     ; the Swing components together. Once the two are updated I can call swap! and pass it the correct value of
+                     ; view and swap! will just rerun until it is set. The only problem I see here is that the user will have time
+                     ; to interact with the onscreen components before swap! finishes. But that really shouldn't be a problem
+                     ; because the only code that would be affected by such user actions would be the code right here and since this
+                     ; code is blocking until the swap! completes... there's no problem.
+                     ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
+                     (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
+                     chans)
+      :update-view-chan (let [update-view-chan (second val)] (conj chans update-view-chan))
+      :add-component (let [{:keys [component app-ref app-val]} (second val)
                            ctx (create-ctx app-ref app-val)
                            components (get-in @retroact-state [:app-ref->components app-ref] {})
-                           next-components (update-components ctx components)]
-                       ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
-                       ;   to be sure priority is set - I remember seeing that somewhere.
-                       ; - loop through all components in current app-ref.
-                       ; update-view-chan has app-ref for the app at the other end of it. There is one update-view-chan per app.
-                       ;
-                       ; No worries about map running outside swap!. The :view inside :components vector is only updated in this
-                       ; place and this place is sequential. In addition, changes to :state will always trigger another put to
-                       ; update-view-chan, which will cause this code to run again. In the worst case the code runs an extra time,
-                       ; not too few times.
-                       ; TODO: update docs. In fact, running the map outside swap! is critical. Because I want to update view and
-                       ; the Swing components together. Once the two are updated I can call swap! and pass it the correct value of
-                       ; view and swap! will just rerun until it is set. The only problem I see here is that the user will have time
-                       ; to interact with the onscreen components before swap! finishes. But that really shouldn't be a problem
-                       ; because the only code that would be affected by such user actions would be the code right here and since this
-                       ; code is blocking until the swap! completes... there's no problem.
-                       ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
+                           comp-id (:comp-id component)
+                           component-exists (contains? components comp-id)
+                           component (if component-exists
+                                       (merge (get components comp-id) component)
+                                       component)
+                           next-component (update-component ctx component)
+                           next-components (assoc components comp-id next-component)]
+                       (when (and component-exists (:onscreen-component next-component))
+                         (run-component-did-remount ctx next-component))
                        (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
-                       (recur chans))
-        :update-view-chan (let [update-view-chan (second val)] (recur (conj chans update-view-chan)))
-        :add-component (let [{:keys [component app-ref app-val]} (second val)
-                             ctx (create-ctx app-ref app-val)
-                             components (get-in @retroact-state [:app-ref->components app-ref] {})
-                             comp-id (:comp-id component)
-                             component-exists (contains? components comp-id)
-                             component (if component-exists
-                                         (merge (get components comp-id) component)
-                                         component)
-                             next-component (update-component ctx component)
-                             next-components (assoc components comp-id next-component)]
-                         (when (and component-exists (:onscreen-component next-component))
-                           (run-component-did-remount ctx next-component))
-                         (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
-                         (recur chans))
-        :remove-component (let [{:keys [comp-id app-ref]} (second val)]
-                            (swap! retroact-state update-in [:app-ref->components app-ref] dissoc comp-id)
-                            (recur chans))
-        :call-fn (let [[_ f args] val]
-                     (apply f args)
-                     (recur chans))
-        :debug-output-components (do (debug-output-components (get @retroact-state :app-ref->components))
-                                     (recur chans))
-        :shutdown (do (log/trace "SHUTTING DOWN RETROACT MAIN LOOP")) ; do nothing, will not recur
-        (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)
-            (recur chans)))
-      )))
+                       chans)
+      :remove-component (let [{:keys [comp-id app-ref]} (second val)]
+                          (swap! retroact-state update-in [:app-ref->components app-ref] dissoc comp-id)
+                          ; TODO: remove the update-view-chan from chans?
+                          chans)
+      :call-fn (let [[_ f args] val]
+                 (apply f args)
+                 chans)
+      :debug-output-components (do (debug-output-components (get @retroact-state :app-ref->components))
+                                   chans)
+      :shutdown (do (log/trace "SHUTTING DOWN RETROACT MAIN LOOP")
+                    :shutdown) ; pass :shutdown to caller `retroact-main-loop` to explicitly request termination of main loop.
+      (do (log/error "unrecognized command to retroact-cmd-chan, ignoring:" cmd-name)
+          chans))))
+
+(defn- retroact-main-loop [retroact-cmd-chan]
+  (log/trace "STARTING RETROACT MAIN LOOP")
+  (log/error "test logging from retroact")
+  (loop [chans [retroact-cmd-chan]]
+    (let [new-chans
+          (try
+            (log/error "about to execute retroact single iteration main loop")
+            (let [temp-chans (execute-main-loop-single-iteration chans)]
+              (log/error "no exception thrown in retroact")
+              temp-chans)
+            (catch Exception ex
+              (log/error ex "unhandled exception encountered in retroact main loop, logging and passing to uncaught exception handler")
+              (handle-uncaught-exception ex)
+              chans)
+            (finally
+              (log/error "just a retroact log message in the finally block to be sure...")))]
+      (cond
+        (= :shutdown new-chans) (log/trace "retroact clean shutdown")
+        new-chans (recur new-chans)
+        :else (log/error "retroact got nil or false from main loop unexpectedly, shutting down.")))))
 
 (defn- retroact-main []
   (let [retroact-cmd-chan (chan (buffer 100))

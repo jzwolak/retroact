@@ -41,7 +41,7 @@
   [c ctx t-count]
   (safe-tree-set c (memfn setToggleClickCount t-count) t-count))
 
-(defn create-jtree [ui]
+(defn create-jtree [ctx]
   (let [tree-model (RTreeModel.)
         tree (JTree. ^TreeModel tree-model)]
     (.setTreeComponent tree-model tree)

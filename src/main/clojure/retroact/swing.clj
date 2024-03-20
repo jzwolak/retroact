@@ -10,9 +10,9 @@
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]])
   (:import (clojure.lang ArityException Atom)
-           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit)
+           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit Window)
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
-           (java.awt.event ActionListener ComponentAdapter ComponentListener MouseAdapter WindowAdapter)
+           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
@@ -38,7 +38,10 @@
 ; where ctx contains app-ref, app-val, onscreen-component, and potentially old-view, new-view (or just view).
 ;
 ; I prefer the second: ctx, event, optional-data. Perhaps even put optional-data in the ctx as :data or whatever. Doing
-; so would create a uniform 2-arg handler interface.
+; so would create a uniform 2-arg handler interface. And perhaps I should switch the order of ctx and event.
+;
+; Ok, for now, go with ctx and event as only two args. Put :data in ctx along with whatever else I can.
+;
 
 
 (def client-prop-prefix "retroact-")
@@ -73,10 +76,17 @@
     c))
 
 (defn redraw-onscreen-component [c]
-  (.revalidate c))
+  (.revalidate c)
+  (.repaint c))
+
+(defn- get-default [component getter]
+  (let [new-instance (.newInstance (.getConstructor (class component) (into-array Class [])) (into-array Object []))
+        default-value (getter new-instance)]
+    default-value))
 
 (defn- create-color [color]
   (cond
+    (nil? color) nil
     (instance? Color color) color
     (and (vector? color) (= 3 (count color))) (Color. (nth color 0) (nth color 1) (nth color 2))
     (and (vector? color)) (Color. (nth color 0) (nth color 1) (nth color 2) (nth color 3))
@@ -85,18 +95,27 @@
 (defn- run-on-toolkit-thread-internal [f & args]
   (.postEvent ^EventQueue (-> (Toolkit/getDefaultToolkit) (.getSystemEventQueue))
               ^AWTEvent (RetroactInvocationEvent. (Toolkit/getDefaultToolkit)
-                                                  (fn []
+                                                  (fn toolkit-thread-runnable-fn []
                                                     (apply f args)
-                                                    (when (instance? Atom (first args))
-                                                      #_(log/trace "got atom on toolkit thread with val:" @(first args)))
+                                                    #_(when (instance? Atom (first args))
+                                                      (log/trace "got atom on toolkit thread with val:" @(first args)))
                                                     ))))
 
 (defn run-on-toolkit-thread [f & args]
-  (run-on-toolkit-thread-internal swap! retroact-initiated inc)
-  (apply run-on-toolkit-thread-internal f args)
-  ; Double invoke later on toolkit thread is necessary to capture secondary events caused by f.
-  (run-on-toolkit-thread-internal #(SwingUtilities/invokeLater (fn [] (swap! retroact-initiated dec)
-                                                                 #_(log/info "got atom on toolkit thread with val:" @retroact-initiated "after dec")))))
+  (if (SwingUtilities/isEventDispatchThread)
+    (do
+      (swap! retroact-initiated inc)
+      (try (apply f args)
+           (finally
+             (SwingUtilities/invokeLater
+               (fn dec-retroact-initiated [] (swap! retroact-initiated dec))))))
+    (do
+      (run-on-toolkit-thread-internal swap! retroact-initiated inc)
+      (apply run-on-toolkit-thread-internal f args)
+      ; Double invoke later on toolkit thread is necessary to capture secondary events caused by f.
+      (run-on-toolkit-thread-internal (fn outer-dec-retroact-initiated []
+                                        (SwingUtilities/invokeLater
+                                          (fn dec-retroact-initiated [] (swap! retroact-initiated dec))))))))
 
 
 (defn retroact-initiated?
@@ -206,6 +225,16 @@
     (mouseClicked [mouse-event]
       (click-handler app-ref mouse-event))))
 
+(defn proxy-focus-gained [ctx focus-gained-handler]
+  (proxy [FocusAdapter] []
+    (focusGained [focus-event]
+      (focus-gained-handler ctx focus-event))))
+
+(defn proxy-focus-lost [ctx focus-lost-handler]
+  (proxy [FocusAdapter] []
+    (focusLost [focus-event]
+      (focus-lost-handler ctx focus-event))))
+
 (defn reify-tree-selection-listener [ctx selection-change-handler]
   (reify TreeSelectionListener
     (valueChanged [this event]
@@ -238,6 +267,21 @@
     (changedUpdate [this document-event] (text-change-handler document-event))
     (insertUpdate [this document-event] (text-change-handler document-event))
     (removeUpdate [this document-event] (text-change-handler document-event))))
+
+(defn- set-property
+  "Sets a property on a component that potentially has a ContentPane. If new-value is null, then the default will be
+  used."
+  [c new-value getter setter]
+  (let [new-value (if (nil? new-value) (get-default c getter) new-value)]
+    (cond
+      (instance? RootPaneContainer c) (setter (.getContentPane c) new-value)
+      :else (setter c new-value))))
+
+(defn- set-background [c ctx color]
+  (set-property c (create-color color) #(.getBackground %) #(.setBackground %1 %2)))
+
+(defn set-foreground [c ctx color]
+  (set-property c (create-color color) #(.getForeground %) #(.setForeground %1 %2)))
 
 (defn update-client-properties [c ctx properties]
   (let [{:keys [old-view attr]} ctx
@@ -277,6 +321,45 @@
     (when (and (not= view-width onscreen-width) (not= onscreen-width width))
       (log/warn "onscreen width changed outside Retroact since last update. view-width =" view-width ", onscreen-width =" onscreen-width ", new-width =" width))
     (.setSize c (Dimension. width height))))
+
+(defn- set-some-width [width getter-fn setter-fn]
+  (let [dimension (getter-fn)
+        height (.getHeight dimension)]
+    (setter-fn (Dimension. width height))))
+
+(defn- set-some-height [height getter-fn setter-fn]
+  (let [dimension (getter-fn)
+        width (.getWidth dimension)]
+    (setter-fn (Dimension. width height))))
+
+(defn- set-max-width [c ctx max-width]
+  (set-some-width max-width #(.getMaximumSize c) #(.setMaximumSize c %))
+  #_(let [max-size (.getMaximumSize c)
+          max-height (.getHeight max-size)]
+      (log/info "setting maximum size to" max-width "," max-height "for" c)
+      (.setMaximumSize c (Dimension. max-width max-height))))
+
+(defn- set-min-width [c ctx min-width]
+  (set-some-width min-width #(.getMinimumSize c) #(.setMinimumSize c %))
+  #_(let [min-size (.getMinimumSize c)
+          min-height (.getHeight min-size)]
+      (.setMinimumSize c (Dimension. min-width min-height))))
+
+(defn- set-preferred-width [c ctx preferred-width]
+  (set-some-width preferred-width #(.getPreferredSize c) #(.setPreferredSize c %))
+  #_(let [preferred-size (.getPreferredSize c)
+          preferred-height (.getHeight preferred-size)]
+      (log/info "setting preferred size to" preferred-width "," preferred-height "for" c)
+      (.setPreferredSize c (Dimension. preferred-width preferred-height))))
+
+(defn- set-max-height [c ctx max-height]
+  (set-some-height max-height #(.getMaximumSize c) #(.setMaximumSize c %)))
+
+(defn- set-min-height [c ctx min-height]
+  (set-some-height min-height #(.getMinimumSize c) #(.setMinimumSize c %)))
+
+(defn- set-preferred-height [c ctx preferred-height]
+  (set-some-height preferred-height #(.getPreferredSize c) #(.setPreferredSize c %)))
 
 (defn set-height [c ctx height]
   (let [view-height (get-in ctx [:old-view :height])
@@ -377,9 +460,9 @@
 ; I won't need to look at the class or identity of the actual components, I can just remove the necessary indices, add
 ; the necessary indices, and update attributes.
 (def class-map
-  {:default                    (fn default-swing-component-constructor [ui]
-                    (log/warn "using default constructor to generate a JPanel")
-                    (JPanel.))
+  {:default                    (fn default-swing-component-constructor [ctx]
+                                 (log/warn "using default constructor to generate a JPanel. :class =" (get-in ctx [:view :class]))
+                                 (JPanel.))
    :border-layout              BorderLayout
    :button                     JButton
    :card-layout                CardLayout
@@ -389,6 +472,7 @@
    :file-chooser               JFileChooser
    :file-name-extension-filter create/create-file-name-extension-filter
    :frame                      JFrame
+   :horizontal-glue            create/create-horizontal-glue
    :label                      JLabel
    :list                       create-jlist
    :menu                       JMenu
@@ -405,7 +489,8 @@
    :text-field                 JTextField
    :toggle-button              JToggleButton
    :tool-bar                   JToolBar
-   :tree                       create-jtree})
+   :tree                       create-jtree
+   :window                     create/create-window})
 
 (defn text-changed? [old-text new-text]
   (not
@@ -444,6 +529,11 @@
   [c ctx tooltip]
   (set-on-tab c (fn [tabbed-pane index] (.setToolTipTextAt tabbed-pane index tooltip))))
 
+(defn- set-list-data [c ctx list-data]
+  (let [model (.getModel c)]
+    (.removeAllElements model)
+    (when list-data (.addAll model list-data))))
+
 (defn set-column-names
   [c ctx column-names]
   (safe-table-model-set c (memfn setColumnNames column-names) column-names))
@@ -473,6 +563,9 @@
   #_(when (instance? JTable c)
     (let [model (.getModel c)]
       (.setRowEditableFn model row-editable-fn))))
+
+(defn set-opaque [c ctx opaque]
+  (set-property c opaque #(.isOpaque %) #(.setOpaque %1 %2)))
 
 (defn set-row-selection-interval [c ctx [start end]]
   (if (instance? JScrollPane c)
@@ -583,6 +676,14 @@
                         (fn set-value-at-fn [old-item new-value row col]
                           (set-value-at-handler (:app-ref ctx) (get-view c) old-item new-value row col))))
 
+(defn- on-focus-gained
+  [c ctx focus-gained-handler]
+  (.addFocusListener c (proxy-focus-gained (create-handler-context ctx c) focus-gained-handler)))
+
+(defn- on-focus-lost
+  [c ctx focus-lost-handler]
+  (.addFocusListener c (proxy-focus-lost (create-handler-context ctx c) focus-lost-handler)))
+
 (defn on-click
   [c ctx click-handler]
   (if (not (instance? JScrollPane c))
@@ -593,14 +694,10 @@
 
 ; *** :render and :class are reserved attributes, do not use! ***
 (def attr-appliers
-  {:background             (fn set-background [c ctx color] (cond
-                                                              (instance? RootPaneContainer c) (.setBackground (.getContentPane c) (create-color color))
-                                                              :else (.setBackground c (create-color color))))
+  {:background             set-background
    :border                 (fn set-border [c ctx border] (.setBorder c border))
    :client-properties      update-client-properties
-   :color                  (fn set-color [c ctx color ] (cond
-                                                         (instance? RootPaneContainer c) (.setForeground (.getContentPane c) (create-color color))
-                                                         :else (.setForeground c (create-color color))))
+   :color                  set-foreground
    :constraints            set-constraints
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :description            {:recreate [FileNameExtensionFilter]}
@@ -627,9 +724,7 @@
                                      :else (.getLayout c)))}
    :line-wrap              (fn set-line-wrap [c ctx line-wrap] (.setLineWrap c line-wrap))
    :name                   (fn set-name [c ctx name] (.setName c name))
-   :opaque                 (fn set-opaque [c ctx opaque] (cond
-                                                           (instance? RootPaneContainer c) (.setOpaque (.getContentPane c) opaque)
-                                                           :else (.setOpaque c opaque)))
+   :opaque                 set-opaque
    :owner                  {:recreate [JDialog]}
    :row-selection-interval set-row-selection-interval
    :selected               (fn set-selected [c ctx selected?]
@@ -653,6 +748,12 @@
                             :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
    :width                  set-width
+   :max-width              set-max-width
+   :min-width              set-min-width
+   :preferred-width        set-preferred-width
+   :max-height             set-max-height
+   :min-height             set-min-height
+   :preferred-height       set-preferred-height
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
    :on-close               set-on-close
    :layout-constraints     (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
@@ -691,6 +792,8 @@
    ; Tabbed Pane attr appliers
    :tab-title              set-tab-title
    :tab-tooltip            set-tab-tooltip
+   ; List attr appliers
+   :list-data              set-list-data
    ; Table attr appliers
    :column-names           set-column-names
    :row-editable-fn        set-row-editable-fn
@@ -718,6 +821,8 @@
    :on-selection-change    on-selection-change
    :on-text-change         on-text-change
    :on-set-value-at        on-set-value-at
+   :on-focus-gained        on-focus-gained
+   :on-focus-lost          on-focus-lost
    ; Mouse listeners
    :on-click               on-click
    ; Menus

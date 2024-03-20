@@ -22,8 +22,8 @@
     (instance? JScrollPane table) (safe-table-model-set (-> table (.getViewport) (.getView)) f attribute)
     :else (log/error "skipping fn on table because component does not appear to be a table: " table)))
 
-(defn create-jtable [ui]
+(defn create-jtable [{:keys [view]}]
   (log/info "creating jtable")
-  (if (:headers ui)
+  (if (:headers view)
     (JScrollPane. (JTable. (RTableModel.)))
     (JTable. (RTableModel.))))

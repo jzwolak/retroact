@@ -315,8 +315,25 @@ This isn't foolproof, but it works in many cases.
 
 ## Side Effects
 
-Retroact has support for side effects, but be careful. Somethings should _not_ be side effects. Here's a few examples
-of things that should be side effects:
+Quick example...
+```{:side-effect (fn [app-ref old-val new-val] ...)}```
+
+Example with render...
+```
+{:side-effect (fn [app-ref old-val new-val] ...)
+ :render (fn [app-ref app-val] {:class :panel :contents [...]}}
+```
+
+Retroact has support for side effects, but be careful. Somethings should _not_ be side effects. Side effects are also
+expensive. All side effects are called everytime the app-ref value is changed. Therefore, the first thing the side
+effect should do is check that something changed to warrant it running. This would likely involve a change from old-val
+to new-val for a specific path in the app-ref. A change should be looked for, not a specific value. Because later calls
+to the side effect may be from a change in another path in app-ref. For something like sending an email, one may wish
+to set a value in app-ref indicating the email was sent (successfully or with an error). In reality, handlers on buttons
+can do this much better, but in some cases the side effect needs to be in response to a change in state and not a user
+action. Just make sure the side effect fn _checks_ for the _change_ in state.
+
+Here's a few examples of things that should be side effects:
 
 * making a network call to send an email
 * starting a long running task to calculate something complex

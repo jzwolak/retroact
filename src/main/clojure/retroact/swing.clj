@@ -14,7 +14,7 @@
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
@@ -479,6 +479,7 @@
    :menu-item                  JMenuItem
    :mig-layout                 MigLayout
    :panel                      JPanel
+   :popup-menu                 JPopupMenu
    :option-pane                create/create-joption-pane
    :scroll-pane                JScrollPane
    :separator                  JSeparator
@@ -825,11 +826,6 @@
    :on-focus-lost          on-focus-lost
    ; Mouse listeners
    :on-click               on-click
-   ; Menus
-   :menu-bar               {:get-existing-children mb/get-existing-children
-                            :add-new-child-at      mb/add-new-child-at
-                            :remove-child-at       mb/remove-child-at
-                            :get-child-at          mb/get-child-at}
    ; Drag and Drop
    ; :on-drag, :on-drag-over, and :on-drop may be used together to implement drag and drop, however, another way exists.
    ; See :drag-enabled
@@ -840,6 +836,15 @@
    ; expand the abilities of this approach.
    :drag-enabled           set-drag-enabled
    :transfer-handler       set-transfer-handler
+   ; Children and Component appliers (not all are here, but if they don't fit in another section, they're here)
+   ; Popup-menu
+   :popup-menu             {:get (fn get-popup-menu [c ctx] (.getComponentPopupMenu c))
+                            :set (fn set-popup-menu [c ctx popup-menu] (.setComponentPopupMenu c popup-menu))}
+   ; Menus
+   :menu-bar               {:get-existing-children mb/get-existing-children
+                            :add-new-child-at      mb/add-new-child-at
+                            :remove-child-at       mb/remove-child-at
+                            :get-child-at          mb/get-child-at}
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:

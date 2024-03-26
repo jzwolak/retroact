@@ -3,6 +3,7 @@
             [clojure.tools.logging :as log]
             [clojure.set :refer [difference]]
             [retroact.swing.create-fns :as create]
+            [retroact.swing.event-queue :as event-queue]
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
@@ -93,6 +94,7 @@
     :else (Color. color)))
 
 (defn- run-on-toolkit-thread-internal [f & args]
+  #_@event-queue/event-queue-register
   (.postEvent ^EventQueue (-> (Toolkit/getDefaultToolkit) (.getSystemEventQueue))
               ^AWTEvent (RetroactInvocationEvent. (Toolkit/getDefaultToolkit)
                                                   (fn toolkit-thread-runnable-fn []
@@ -105,7 +107,8 @@
   (if (SwingUtilities/isEventDispatchThread)
     (do
       (swap! retroact-initiated inc)
-      (try (apply f args)
+      (try (log/info "executing directly on EDT because we're already on EDT")
+           (apply f args)
            (finally
              (SwingUtilities/invokeLater
                (fn dec-retroact-initiated [] (swap! retroact-initiated dec))))))
@@ -129,7 +132,8 @@
     (log/info "retroact-initiated? atom-val:" atom-val))
   (or
     (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent))
-    (and (SwingUtilities/isEventDispatchThread) (> @retroact-initiated 0))))
+    (and (SwingUtilities/isEventDispatchThread) (> @retroact-initiated 0)))
+  #_(event-queue/retroact-initiated?))
 
 (defmulti set-client-prop (fn [comp name value] (class comp)))
 (defmethod set-client-prop JComponent [comp name value]
@@ -572,11 +576,11 @@
   (if (instance? JScrollPane c)
     (set-row-selection-interval (get-scrollable-view c) ctx [start end])
     (if (instance? JTable c)
-      (SwingUtilities/invokeLater
+      (run-on-toolkit-thread
         #(do
            (if (and start end)
-            (.setRowSelectionInterval c start end)
-            (.clearSelection c)))))))
+             (.setRowSelectionInterval c start end)
+             (.clearSelection c)))))))
 
 (defn on-change [c ctx change-handler]
   (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))
@@ -737,12 +741,16 @@
                              #_(.printStackTrace (Exception. "stack trace"))
                              (let [old-text (.getText c)
                                    new-text (str text)]
+                               (log/info "about to change text to: model name:" text)
                                ; TODO: should be unnecessary. This must be left over from the early days.
                                ; Though maybe it has to do with nil and empty string being treated the same. See text-changed?
                                ; I added (str text) though, which converts nil to the empty string, so text-changed?
                                ; shouldn't be necessary, I think.
-                               (when (text-changed? old-text new-text)
-                                 (.setText c new-text))))
+                               (if (text-changed? old-text new-text)
+                                 (do
+                                   (log/info "definitely changing text (model name)")
+                                   (.setText c new-text))
+                                 (log/info "text not changed because old text matched (model name)"))))
    :title                  set-title
    :tool-tip-text          set-tool-tip-text
    :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))

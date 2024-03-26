@@ -355,7 +355,9 @@ the applier in the appropriate render fn and reference the application state tha
 If the appropriate applier does not exist, then you may write one. They are easy enough to write and will maintain
 the ease of a declarative view and the view-is-a-function-of-the-state paradigm. Everything will be easier this way.
 
-# Internals
+# Internals and Special Considerations
+
+## State Management and Updates
 
 When the app-ref (application state) changes, Retroact has a watch on that
 ref, which responds by updating the view. The watch does so by enqueueing
@@ -371,6 +373,34 @@ rendered. Therefor, the value of app-ref, or more importantly the rendered
 view, is saved with the onscreen component. This can then be retrieved as the
 old value of the rendered view for comparison to see what has changed from
 one view rendering to the next.
+
+## Java EventQueue
+
+When using Swing (and AWT) Retroact installs a custom EventQueue
+which doesn't affect event processing as it just passes the events
+through to the default instance after recording internally where
+the event came from. However, if your application installs or needs
+a custom EventQueue then consider this. The Retroact custom EventQueue
+is used to detect if an event originated within Retroact or outside
+Retroact (e.g., from the user). Events originating within Retroact
+should not trigger handlers, which could then trigger further events
+or state changes, which could then result in an infinite cycle that
+locks up the application or
+race conditions that loses state. There are plans to allow for
+application code in the Retroact custom EventQueue or having multiple
+custom EventQueues using an interceptor pattern, but at the
+moment the best solution is to avoid using your own custom EventQueue.
+A custom EventQueue should really be unnecessary for nearly _ALL_
+applications.  The only time I ever used one before Retroact was
+for debugging. I tried hard to come up with a solution for detecting
+event source and this was the only way. I also investigated other
+ways to break the cycle of events and this was all I could come up
+with. The problem is in Swing and how it handle events internally.
+Some components post additional events when processing an event
+(like JTextField.setText). Once additional events are posted it's
+impossible to tell where those additional events originated from.
+That is... without overriding the EventQueue.postEvent method.
+
 
 # Tests
 

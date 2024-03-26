@@ -294,6 +294,8 @@
           :else (if (or (not (= (get old-view attr) (get new-view attr)))
                           (not (= (contains? old-view attr) (contains? new-view attr))))
                   (do
+                    (when (= attr :text)
+                      (log/info "in apply-attributes and got :text (model name) new =" (get new-view attr) ", old =" (get old-view attr)))
                     (tk/run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
                                            (assoc ctx :attr attr)
                                            (get new-view attr)))))))

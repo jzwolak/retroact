@@ -3,6 +3,9 @@
   (:import (java.awt EventQueue)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
+; This was a failed attempt to solve the data loss problem coming from delays in updating the UI and a backlog of user
+; input. It will be removed in a future release and is not being used.
+
 (gen-class
   :name "retroact.swing.compiled.retroact_event_queue.RetroactEventQueue"
   :extends java.awt.EventQueue

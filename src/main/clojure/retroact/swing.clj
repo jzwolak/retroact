@@ -1,5 +1,6 @@
 (ns retroact.swing
   (:require [clojure.pprint :refer [pprint]]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [clojure.set :refer [difference]]
             [retroact.swing.create-fns :as create]
@@ -49,6 +50,8 @@
 
 (defonce object-refs (atom {}))
 
+(defonce silenced-events (atom #{}))
+
 ; This holds a number for retroact initiated invocations on the EDT. Each invocation increments this value on start and
 ; decrements on finish. This allows other events enqueued on the event queue to be marked as initiated by Retroact.
 ; This is not foolproof as the event queue is thread safe and may take events from threads other than the EDT. Those
@@ -58,8 +61,17 @@
 ; initiated.
 (def retroact-initiated (atom 0))
 
-(def get-view)
-(def get-ctx)
+(declare get-view)
+(declare get-ctx)
+(declare get-client-prop)
+(declare set-client-prop)
+
+(defn get-comp-id [onscreen-component]
+  (if-let [comp-id (get-client-prop onscreen-component "comp-id")]
+    comp-id
+    (let [comp-id (str (gensym "comp-id-"))]
+      (set-client-prop onscreen-component "comp-id" comp-id)
+      comp-id)))
 
 (defn create-handler-context [ctx onscreen-component]
   ; ctx from onscreen-component has :old-view, :new-view, and :view, where :view is equal to either :old-view or
@@ -107,8 +119,7 @@
   (if (SwingUtilities/isEventDispatchThread)
     (do
       (swap! retroact-initiated inc)
-      (try (log/info "executing directly on EDT because we're already on EDT")
-           (apply f args)
+      (try (apply f args)
            (finally
              (SwingUtilities/invokeLater
                (fn dec-retroact-initiated [] (swap! retroact-initiated dec))))))
@@ -266,11 +277,33 @@
         (when (not (.getValueIsAdjusting event))
           (selection-change-handler (:app-ref ctx) (get-view table) table selected-values))))))
 
-(defn reify-document-listener-to-text-change-listener [text-change-handler]
+(defn- log-document-event [msg event]
+  (let [document (.getDocument event)
+        length (.getLength document)]
+    (log/info (str msg ": " (.getText document 0 length)))))
+
+(defn reify-document-listener-to-text-change-listener [text-component text-change-handler]
   (reify DocumentListener
-    (changedUpdate [this document-event] (text-change-handler document-event))
-    (insertUpdate [this document-event] (text-change-handler document-event))
-    (removeUpdate [this document-event] (text-change-handler document-event))))
+    (changedUpdate [this document-event]
+      (if (contains? @silenced-events [(get-comp-id text-component) :text])
+        (do)
+        (do
+          (text-change-handler document-event))))
+    (insertUpdate [this document-event]
+      #_(try
+        (let [comp-id (get-comp-id text-component)]
+          (log/info "silenced-event?" (contains? @silenced-events [comp-id :text])))
+        (catch Exception e
+          (log/warn e "got exception while checking for silenced-events")))
+      (if (contains? @silenced-events [(get-comp-id text-component) :text])
+        (do)
+        (do
+          (text-change-handler document-event))))
+    (removeUpdate [this document-event]
+      (if (contains? @silenced-events [(get-comp-id text-component) :text])
+        (do)
+        (do
+          (text-change-handler document-event))))))
 
 (defn- set-property
   "Sets a property on a component that potentially has a ContentPane. If new-value is null, then the default will be
@@ -427,7 +460,6 @@
 (prefer-method remove-child-at RootPaneContainer Container)
 (defmethod remove-child-at JList [jlist index] (println "JList remove-child-at not implemented yet"))
 (defmethod remove-child-at JTabbedPane [tabbed-pane index]
-  (log/info "removing tab, just want to check the current thread")
   (.removeTabAt tabbed-pane index))
 (defmethod remove-child-at JMenu [menu index]
   (.remove menu ^int index))
@@ -582,6 +614,22 @@
              (.setRowSelectionInterval c start end)
              (.clearSelection c)))))))
 
+(defn set-text [text-component ctx text]
+  (let [text-in-field (str (.getText text-component))
+        text-state (str text)
+        text-prop (str (get-client-prop text-component "text"))
+        event-id [(get-comp-id text-component) :text]]
+    (cond
+      (= text-prop text-state) (do)
+      (and (not (= text-prop text-state))
+           (= text-prop text-in-field)) (do (swap! silenced-events conj event-id)
+                                            (.setText text-component text-state)
+                                            (set-client-prop text-component "text" text-state)
+                                            (swap! silenced-events disj event-id))
+      (and (not (= text-prop text-state))
+           (not (= text-prop text-in-field))) (do (set-client-prop text-component "text" text-state))
+      :else (log/error "should never reach here! (updating text)"))))
+
 (defn on-change [c ctx change-handler]
   (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))
 
@@ -598,15 +646,11 @@
         drag-source (DragSource.)
         local-ctx (assoc ctx :onscreen-component c)]
     ;(swap! object-refs assoc :drag-source drag-source)
-    (log/info "connecting on-drag handler")
-    (log/info "object-refs =" @object-refs)
-    (log/info "component for drag source:" c)
     ;TODO: allow the user to decide what DnD action to use. Defaulting to ACTION_COPY now.
     (.createDefaultDragGestureRecognizer
       drag-source c DnDConstants/ACTION_COPY
       (reify DragGestureListener
         (dragGestureRecognized [this drag-gesture-event]
-          (log/info "retroact recognizing drag gesture")
           (when-let [transferable (handler (assoc local-ctx :app-val @app-ref) drag-gesture-event)]
             (.startDrag drag-gesture-event DragSource/DefaultCopyDrop transferable (proxy [DragSourceAdapter] []))))))))
 
@@ -616,8 +660,7 @@
   (let [local-ctx (assoc ctx :onscreen-component c)
         drop-target (DropTarget. c DnDConstants/ACTION_COPY
                                  (proxy [DropTargetAdapter] []
-                                   (drop [drop-event] (handler (assoc local-ctx :app-val @app-ref) drop-event))))]
-    (log/info "drop target created... but will it be retained? Or garbage collected")))
+                                   (drop [drop-event] (handler (assoc local-ctx :app-val @app-ref) drop-event))))]))
 
 (defn- set-drag-enabled [c ctx drag-enabled]
   (.setDragEnabled (get-scrollable-view c) drag-enabled))
@@ -658,6 +701,7 @@
       (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
   (.addDocumentListener (.getDocument c)
                         (reify-document-listener-to-text-change-listener
+                          c
                           (fn text-change-handler-clojure [doc-event]
                             (try
                               (text-change-handler (create-handler-context ctx c) doc-event (.getText c))
@@ -709,7 +753,6 @@
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
    :editable               (fn set-editable [c ctx editable] (.setEditable c editable))
    :enabled                (fn set-enabled [c ctx enabled]
-                             (log/info ".setEnabled to" (boolean enabled) "with raw val" enabled "on" c)
                              (.setEnabled c ^boolean (boolean enabled)))
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
@@ -737,20 +780,7 @@
    :selected-index         {:deps [:contents]
                             :fn   (fn set-selected-index [c ctx index] (.setSelectedIndex c index))}
    :selection-mode         (fn set-selection-mode [c ctx selection-mode] (.setSelectionMode ^JList c selection-mode))
-   :text                   (fn set-text [c ctx text]
-                             #_(.printStackTrace (Exception. "stack trace"))
-                             (let [old-text (.getText c)
-                                   new-text (str text)]
-                               (log/info "about to change text to: model name:" text)
-                               ; TODO: should be unnecessary. This must be left over from the early days.
-                               ; Though maybe it has to do with nil and empty string being treated the same. See text-changed?
-                               ; I added (str text) though, which converts nil to the empty string, so text-changed?
-                               ; shouldn't be necessary, I think.
-                               (if (text-changed? old-text new-text)
-                                 (do
-                                   (log/info "definitely changing text (model name)")
-                                   (.setText c new-text))
-                                 (log/info "text not changed because old text matched (model name)"))))
+   :text                   set-text
    :title                  set-title
    :tool-tip-text          set-tool-tip-text
    :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))

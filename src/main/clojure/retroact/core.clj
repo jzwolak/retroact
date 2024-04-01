@@ -8,6 +8,7 @@
             [retroact.swing :as swing]
             [retroact.toolkit :as tk])
   (:import (clojure.lang Agent Atom Ref)
+           (java.awt EventQueue)
            (java.lang.ref WeakReference)))
 
 ; TODO: add ability to register exception handler. Wrap all calls to component-did-mount and component-did-update with
@@ -300,7 +301,8 @@
                                            (assoc ctx :attr attr)
                                            (get new-view attr)))))))
     ; Some code relies on the value of view to be the old view until attr appliers complete. But eventually it'd be
-    ; nice to remove this in favor of assoc-ctx
+    ; nice to remove this in favor of assoc-ctx, but beware since there's an assoc-ctx at the beginning of this fn.
+    ; So maybe ctx won't work for this because it will change just before calling the appliers.
     (tk/assoc-view ctx onscreen-component new-view)
     (tk/assoc-ctx (assoc ctx :view new-view) onscreen-component))
   onscreen-component)
@@ -386,6 +388,7 @@
     (go (>! @retroact-cmd-chan cmd))))
 
 (defn- trigger-update-view [app-ref app-val]
+  (log/info "update triggered by" (EventQueue/getCurrentEvent))
   (run-on-app-ref-chan app-ref [:update-view app-ref app-val]))
 
 (defn app-watch

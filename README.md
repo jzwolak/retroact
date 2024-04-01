@@ -374,33 +374,63 @@ view, is saved with the onscreen component. This can then be retrieved as the
 old value of the rendered view for comparison to see what has changed from
 one view rendering to the next.
 
-## Java EventQueue
+## Updating UI Components
 
-When using Swing (and AWT) Retroact installs a custom EventQueue
-which doesn't affect event processing as it just passes the events
-through to the default instance after recording internally where
-the event came from. However, if your application installs or needs
-a custom EventQueue then consider this. The Retroact custom EventQueue
-is used to detect if an event originated within Retroact or outside
-Retroact (e.g., from the user). Events originating within Retroact
-should not trigger handlers, which could then trigger further events
-or state changes, which could then result in an infinite cycle that
-locks up the application or
-race conditions that loses state. There are plans to allow for
-application code in the Retroact custom EventQueue or having multiple
-custom EventQueues using an interceptor pattern, but at the
-moment the best solution is to avoid using your own custom EventQueue.
-A custom EventQueue should really be unnecessary for nearly _ALL_
-applications.  The only time I ever used one before Retroact was
-for debugging. I tried hard to come up with a solution for detecting
-event source and this was the only way. I also investigated other
-ways to break the cycle of events and this was all I could come up
-with. The problem is in Swing and how it handle events internally.
-Some components post additional events when processing an event
-(like JTextField.setText). Once additional events are posted it's
-impossible to tell where those additional events originated from.
-That is... without overriding the EventQueue.postEvent method.
+There's a hard problem of keeping the UI components in sync with the app-state without creating infinite cycles or data
+loss. It may seem like it's possible to just update the component properties from the app-state and have a simple
+condition that doesn't perform the update if the property value and app-state value are equal... but this won't stop
+all cycles and data loss.
 
+The final solution I arrived at was to notice that Retroact can know if the component's property has changed outside
+the app-state updates Retroact makes. This is done by storing the value of the view with the component after the updates
+are complete. The next round of updates retrieves that view value and considers it the old-view. If the old-view does
+not match the current value of the component then the update is _not_ performed because this means something else has
+modified the component (the user in most cases). For this to work properly, it does require that any components that
+may be modified by the user or some outside source must update the app-state with the appropriate values. Otherwise,
+Retroact's cached view will remain out-of-date and never update the component again.
+
+Here's an example to make it concrete.
+
+```clojure
+; this runs in a REPL
+(require '[retroact.core :as retroact])
+(require '[retroact.swing :as swing])
+(import '[javax.swing SwingUtilities])
+(def app-state (atom {:name "John Doe"}))
+
+(defn- handle-text-change
+       [{:keys [app-ref] :as ctx} doc-event text]
+       (println "setting text to:" (str "'" text "'"))
+       (swap! app-ref assoc-in [:name] text)
+       ; Soon this check for retroact-initiated won't be necessary
+       #_(when (not (swing/retroact-initiated?))
+             (swap! app-ref assoc-in [:name] text)))
+
+(defn my-text-field []
+      {:component-did-mount (fn [frame app-ref app-val]
+                                (SwingUtilities/invokeLater
+                                  #(do
+                                     (.pack frame)
+                                     (.setLocationRelativeTo frame nil)
+                                     (.setVisible frame true))))
+       :render (fn [app-ref app-val]
+                   {:class :frame
+                    :on-close :exit
+                    :contents [{:class :text-field
+                                :text (get-in app-val [:name])
+                                :on-text-change handle-text-change}]})})
+
+(defn main []
+      (retroact/init-app-ref app-state)
+      (retroact/create-comp app-state (my-text-field)))
+
+(main)
+```
+
+The key lines here are the `:text (get-in app-val [:name])` and `:on-text-change handle-text-change`. These set the
+text in the text field from the app-state and set the app-state from the text field. Retroact will intelligently
+determine when to actually set the text of the text field so that everything works and there is no data loss and no
+infinite cycles, but you must connect both those attributes to the app-state at the same location for this to work.
 
 # Tests
 

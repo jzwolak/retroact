@@ -288,6 +288,7 @@
       (if (contains? @silenced-events [(get-comp-id text-component) :text])
         (do)
         (do
+          (log/info "DocumentListener.changedUpdate")
           (text-change-handler document-event))))
     (insertUpdate [this document-event]
       #_(try
@@ -628,7 +629,7 @@
                                             (swap! silenced-events disj event-id))
       (and (not (= text-prop text-state))
            (not (= text-prop text-in-field))) (do (set-client-prop text-component "text" text-state))
-      :else (log/error "should never reach here! (updating text)"))))
+      :else (log/error "set-text: should never reach here!"))))
 
 (defn on-change [c ctx change-handler]
   (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))

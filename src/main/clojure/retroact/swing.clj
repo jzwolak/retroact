@@ -76,7 +76,10 @@
 (defn create-handler-context [ctx onscreen-component]
   ; ctx from onscreen-component has :old-view, :new-view, and :view, where :view is equal to either :old-view or
   ; :new-view depending on if an update is running or finished, respectively.
+  ; Except that all those views may be wrong because ctx is captured when the handler is first assigned. If the handler
+  ; doesn't change then the ctx won't be updated. So I'm setting :view. I hope it doesn't break anything.
   (assoc (merge ctx (get-ctx onscreen-component))
+    :view (get-view onscreen-component)
     :onscreen-component onscreen-component
     :app-val @(:app-ref ctx)))
 
@@ -679,7 +682,7 @@
   (.addActionListener c (reify-action-listener
                           (fn [ae]
                             (let [selected-item (.getSelectedItem (.getModel c))]
-                              (selection-change-handler ctx ae selected-item))))))
+                              (selection-change-handler (create-handler-context ctx c) ae selected-item))))))
 
 (defmethod on-selection-change JTree [c ctx selection-change-handler]
   (doseq [sl (vec (.getTreeSelectionListeners c))] (.removeTreeSelectionListener c sl))

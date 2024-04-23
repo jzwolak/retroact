@@ -4,6 +4,7 @@
             [clojure.tools.logging :as log]
             [clojure.set :refer [difference]]
             [retroact.swing.create-fns :as create]
+            [retroact.swing.borders :as borders]
             [retroact.swing.event-queue :as event-queue]
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
@@ -17,6 +18,7 @@
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
+           (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
@@ -99,14 +101,6 @@
   (let [new-instance (.newInstance (.getConstructor (class component) (into-array Class [])) (into-array Object []))
         default-value (getter new-instance)]
     default-value))
-
-(defn- create-color [color]
-  (cond
-    (nil? color) nil
-    (instance? Color color) color
-    (and (vector? color) (= 3 (count color))) (Color. (nth color 0) (nth color 1) (nth color 2))
-    (and (vector? color)) (Color. (nth color 0) (nth color 1) (nth color 2) (nth color 3))
-    :else (Color. color)))
 
 (defn- run-on-toolkit-thread-internal [f & args]
   #_@event-queue/event-queue-register
@@ -319,10 +313,10 @@
       :else (setter c new-value))))
 
 (defn- set-background [c ctx color]
-  (set-property c (create-color color) #(.getBackground %) #(.setBackground %1 %2)))
+  (set-property c (create/create-color color) #(.getBackground %) #(.setBackground %1 %2)))
 
 (defn set-foreground [c ctx color]
-  (set-property c (create-color color) #(.getForeground %) #(.setForeground %1 %2)))
+  (set-property c (create/create-color color) #(.getForeground %) #(.setForeground %1 %2)))
 
 (defn update-client-properties [c ctx properties]
   (let [{:keys [old-view attr]} ctx
@@ -509,6 +503,7 @@
    :check-box                  JCheckBox
    :combo-box                  create-jcombobox
    :dialog                     create/create-jdialog                            ; uses :owner attr in constructor
+   :empty-border               borders/create-empty-border
    :file-chooser               JFileChooser
    :file-name-extension-filter create/create-file-name-extension-filter
    :frame                      JFrame
@@ -528,6 +523,7 @@
    :table                      create-jtable
    :text-area                  create/create-jtext-area
    :text-field                 JTextField
+   :titled-border              TitledBorder
    :toggle-button              JToggleButton
    :tool-bar                   JToolBar
    :tree                       create-jtree
@@ -619,11 +615,13 @@
              (.clearSelection c)))))))
 
 (defn set-text [text-component ctx text]
+  ; This is a complex update because it's trying to avoid infinite cycles between the EDT and Retroact event loops.
   (let [text-in-field (str (.getText text-component))
         text-state (str text)
         text-prop (str (get-client-prop text-component "text"))
         event-id [(get-comp-id text-component) :text]]
     (cond
+      ;
       (= text-prop text-state) (do)
       (and (not (= text-prop text-state))
            (= text-prop text-in-field)) (do (swap! silenced-events conj event-id)
@@ -746,9 +744,12 @@
 
 
 ; *** :render and :class are reserved attributes, do not use! ***
+; Changes to :render do not update the UI. Changes to :class cause a disposal of previous component and creation of
+; an entirely new one. Changes to :render perhaps should do the same, but ideally, should update the underlying
+; rendering state.
 (def attr-appliers
   {:background             set-background
-   :border                 (fn set-border [c ctx border] (.setBorder c border))
+   :border                 borders/set-border               ; maps to border factory methods, see set-border
    :client-properties      update-client-properties
    :color                  set-foreground
    :constraints            set-constraints

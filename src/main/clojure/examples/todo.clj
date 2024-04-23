@@ -2,7 +2,7 @@
   (:require [retroact.core :refer [init-app create-comp]]
             [clojure.tools.logging :as log]
             [retroact.swing :refer [get-view]])
-  (:import (java.awt Color Insets)
+  (:import (java.awt BorderLayout Color Insets)
            (javax.swing.border LineBorder)
            (javax.swing BorderFactory)))
 
@@ -101,43 +101,46 @@
                    :col-constraints    "[]"}
       :height     800
       :width      400
-      :contents   [{:class       :table
-                    :constraints "growx, wrap"
-                    ;:background  0xedaacc
-                    ;:border      (LineBorder. Color/BLUE 1 true)
-                    :opaque      true
-                    ;:contents    (vec (map render-todo-item (get-in app-value [:state :todo-items])))
-                    ; TODO: consider creating table model each time spec is modified for how table model should access
-                    ; data. Then, have table model listen to watch on atom and check if data has changed.
-                    :table-model {:data-fn (fn [app-ref])}
-                    :table-data  (vec (get-in app-value [:state :todo-items]))
-                    :row-fn      todo-table-row-fn #_(fn [item] [(boolean (:done? item)) (:text item)])
-                    :row-editable-fn (fn [item] [true true])
-                    :on-set-value-at handle-set-value-at
-                    }
+      :contents   [{:class    :panel
+                    :constraints     "growx, wrap"
+                    :border          [:line Color/GRAY 1 true] ;(LineBorder. Color/BLUE 1 true)
+                    :opaque          true
+                    :background 0xffffff
+                    :layout {:class :border-layout}
+                    :contents [{:class           :table
+                                :constraints     BorderLayout/CENTER
+                                ;:background  0xedaacc
+                                :opaque          true
+                                ;:contents    (vec (map render-todo-item (get-in app-value [:state :todo-items])))
+                                ; TODO: consider creating table model each time spec is modified for how table model should access
+                                ; data. Then, have table model listen to watch on atom and check if data has changed.
+                                :table-model     {:data-fn (fn [app-ref])}
+                                :table-data      (vec (get-in app-value [:state :todo-items]))
+                                :row-fn          todo-table-row-fn #_(fn [item] [(boolean (:done? item)) (:text item)])
+                                :row-editable-fn (fn [item] [true true])
+                                :on-set-value-at handle-set-value-at
+                                }]}
 
-                   {:class       :check-box
-                    :constraints "growx, wrap"
-                    :on-action   handle-test-checkbox
-                    :text        "Test"}
-                   {:class          :text-field
-                    ; TODO: this returns a different object each time which means the result of render is different
-                    ; even though the state may be the same. render fns and Retroact work best when render fns are pure.
-                    ; Which means, same inputs, same outputs.
-                    :border         (BorderFactory/createCompoundBorder
-                                      (LineBorder. Color/GRAY 1 true)
-                                      (BorderFactory/createEmptyBorder 5 5 5 5))
-                    ;:background     0xaaedcc
-                    :text           (let [t (get-in app-value [:state :new-todo-item-text])]
-                                      (log/info "rendering new todo item text as" t)
-                                      t)
-                    #_:caret-position #_(get-in app-value [:state :new-todo-item-caret-position])
-                    :constraints    "growx"
-                    ; tracking the text as it changes doesn't work. I get exceptions and the caret position isn't
-                    ; preserved.
-                    :on-text-change handle-new-todo-item-text-change
-                    :on-action      handle-new-todo-item
-                    #_(fn [app-ref action-event] (handle-new-todo-item app-ref action-event))}]})
+                   #_{:class       :check-box
+                      :constraints "growx, wrap"
+                      :on-action   handle-test-checkbox
+                      :text        "Test"}
+                   {:class       :panel
+                    :border      [:compound [:line Color/GRAY 1 true] [:empty 5 5 5 5]]
+                    :constraints "growx"
+                    :background Color/WHITE
+                    :layout {:class :border-layout}
+                    :contents    [{:class          :text-field
+                                   :constraints BorderLayout/CENTER
+                                   :text           (let [t (get-in app-value [:state :new-todo-item-text])]
+                                                     (log/info "rendering new todo item text as" t)
+                                                     t)
+                                   #_:caret-position #_(get-in app-value [:state :new-todo-item-caret-position])
+                                   ; tracking the text as it changes doesn't work. I get exceptions and the caret position isn't
+                                   ; preserved.
+                                   :on-text-change handle-new-todo-item-text-change
+                                   :on-action      handle-new-todo-item
+                                   #_(fn [app-ref action-event] (handle-new-todo-item app-ref action-event))}]}]})
 
    })
 

@@ -1,7 +1,24 @@
 (ns retroact.swing.create-fns
-  (:import (java.awt Frame Window)
+  (:import (java.awt Color Font Frame Window)
+           (java.util Map)
            (javax.swing Box JDialog JOptionPane JTextArea)
            (javax.swing.filechooser FileNameExtensionFilter)))
+
+(defn create-color [color]
+  (cond
+    (nil? color) nil
+    (instance? Color color) color
+    (and (vector? color) (= 3 (count color))) (Color. (nth color 0) (nth color 1) (nth color 2))
+    (and (vector? color)) (Color. (nth color 0) (nth color 1) (nth color 2) (nth color 3))
+    :else (Color. color)))
+
+(defn create-font [font]
+  (cond
+    (nil? font) nil
+    (instance? Font font) font
+    (vector? font) (Font. (nth font 0) (nth font 1) (nth font 2))
+    (map? font) (Font. ^Map font)
+    :else (Font. font)))
 
 (defn create-jdialog [{:keys [view]}]
   (JDialog. (:owner view)))

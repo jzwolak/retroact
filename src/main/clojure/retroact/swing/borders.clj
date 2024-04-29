@@ -11,7 +11,8 @@
 
 (defn- create-border
   [border-spec]
-  (let [[type arg1 arg2 arg3 arg4 arg5 arg6] border-spec]
+  (let [border-spec (if (keyword? border-spec) [border-spec] border-spec)
+        [type arg1 arg2 arg3 arg4 arg5 arg6] border-spec]
     (condp = [type (dec (count border-spec))]
       [:bevel 1] (BorderFactory/createBevelBorder arg1)
       [:bevel 3] (BorderFactory/createBevelBorder arg1 (create-color arg2) (create-color arg3))

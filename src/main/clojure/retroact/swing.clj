@@ -17,7 +17,7 @@
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
@@ -523,6 +523,7 @@
    :table                      create-jtable
    :text-area                  create/create-jtext-area
    :text-field                 JTextField
+   :text-pane                  JTextPane
    :titled-border              TitledBorder
    :toggle-button              JToggleButton
    :tool-bar                   JToolBar
@@ -754,6 +755,7 @@
    :color                  set-foreground
    :constraints            set-constraints
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
+   :content-type           (fn set-content-type [c ctx content-type] (.setContentType c content-type))
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
    :editable               (fn set-editable [c ctx editable] (.setEditable c editable))

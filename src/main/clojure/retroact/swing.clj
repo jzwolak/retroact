@@ -17,11 +17,13 @@
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
            (java.beans PropertyChangeListener)
+           (java.util WeakHashMap)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
+           (retroact.swing.compiled.identity_wrapper IdentityWrapper)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -50,7 +52,17 @@
 
 (def client-prop-prefix "retroact-")
 
-(defonce object-refs (atom {}))
+; put object as key and IdentityWrapper as value in :object->identity. No get will ever be called. This is just to
+; create a reference to the IdentityWrapper so it won't be garbage collected until the component is garbage collected.
+; Note that this means we don't care about changes to the hash code because we're never looking up the component in
+; this map. In addition, the component's weak ref key can be removed because even if the hash code has changed since the
+; component was added, it doesn't matter, the WeakHashMap would not be able to get the hash code anyway.
+; The :identity->props WeakHashMap will have an IdentityWrapper as the key (same as the IdentityWrapper that appears as
+; the value for the component in the previous map) and this is used to actually lookup the component's properties.
+(defonce object->identity (WeakHashMap.))
+(defonce identity->props (WeakHashMap.))
+#_(defonce comp->props (atom {:object->identity (WeakHashMap.)
+                            :identity->props (WeakHashMap.)}))
 
 (defonce silenced-events (atom #{}))
 
@@ -143,33 +155,46 @@
     (and (SwingUtilities/isEventDispatchThread) (> @retroact-initiated 0)))
   #_(event-queue/retroact-initiated?))
 
-(defmulti set-client-prop (fn [comp name value] (class comp)))
+(defmulti set-client-prop
+          "Call on EDT. Sets a client property and has a mechanism for non-JComponent objects to set a property."
+          (fn [comp name value] (class comp)))
 (defmethod set-client-prop JComponent [comp name value]
   (.putClientProperty comp (str client-prop-prefix name) value))
 (defmethod set-client-prop Object [comp name value]
   ; ignore. Or possibly in the future use an internal map of (map comp -> ( map name -> value) )
   ; Which would require removing things from the map when they are removed from the view. WeakReference may help with
   ; this.
-  )
+  ; The following will fail concurrency. Because object->identity and identity->props are WeakHashMap objects modified
+  ; within swap!. Furthermore, two calls to put could happen simultaneously from different threads.
+  (let [id-wrapper (IdentityWrapper. comp)
+        props (get identity->props id-wrapper {})]
+    (when (not (contains? identity->props id-wrapper))
+      (.put object->identity comp id-wrapper))
+    (.put identity->props id-wrapper (assoc props name value))))
 
-(defmulti get-client-prop (fn [comp name] (class comp)))
+(defmulti get-client-prop
+          "Call on EDT. Gets a client property for all objects including non-JComponent."
+          (fn [comp name] (class comp)))
 (defmethod get-client-prop JComponent [comp name]
   (let [val
         (.getClientProperty comp (str client-prop-prefix name))]
     val))
 (defmethod get-client-prop Object [comp name]
-  ; ignore
-  )
+  (let [id-wrapper (IdentityWrapper. comp)]
+    (get-in identity->props [id-wrapper name])))
 
 (defn assoc-view [onscreen-component view]
   (set-client-prop onscreen-component "view" view))
 
 (defn get-view [onscreen-component]
+  ; TODO: this loop should really not be necessary and may even cause problems. The view should always be on the
+  ; component or just not present in the case of non-JComponent components.
   (loop [oc onscreen-component]
+    #_(log/info "get-view got view =" (apply str (take 100 (if oc (get-client-prop oc "view")))))
     (let [view (if oc (get-client-prop oc "view"))]
       (cond
         view view
-        (nil? oc) nil
+        (or (nil? oc) (not (instance? Component oc))) nil
         :else (recur (.getParent oc))))))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
@@ -182,7 +207,7 @@
   (let [ctx (if onscreen-component (get-client-prop onscreen-component "ctx"))]
     (cond
       ctx ctx
-      (nil? onscreen-component) nil
+      (or (nil? onscreen-component) (not (instance? Component onscreen-component))) nil
       :else (recur (.getParent onscreen-component)))))
 
 (def on-close-action-map
@@ -342,6 +367,9 @@
     (catch Exception e
       ; ignore
       )))
+
+(defn set-editable [c ctx editable]
+  (set-property c editable #(.getEditable %) #(.setEditable %1 %2)))
 
 (defn- set-title [c ctx title]
   (.setTitle c title))
@@ -648,7 +676,6 @@
   (let [c (get-scrollable-view c)
         drag-source (DragSource.)
         local-ctx (assoc ctx :onscreen-component c)]
-    ;(swap! object-refs assoc :drag-source drag-source)
     ;TODO: allow the user to decide what DnD action to use. Defaulting to ACTION_COPY now.
     (.createDefaultDragGestureRecognizer
       drag-source c DnDConstants/ACTION_COPY
@@ -758,12 +785,13 @@
    :content-type           (fn set-content-type [c ctx content-type] (.setContentType c content-type))
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
-   :editable               (fn set-editable [c ctx editable] (.setEditable c editable))
+   :editable               set-editable
    :enabled                (fn set-enabled [c ctx enabled]
                              (.setEnabled c ^boolean (boolean enabled)))
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}
+   :font                   (fn set-font [c ctx font] (.setFont c font))
    :font-size              (fn set-font-size [c ctx size] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int (.getStyle f) ^float size))))
    :font-style             (fn set-font-style [c ctx style] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int style ^float (.getSize f)))))
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))

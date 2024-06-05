@@ -42,6 +42,7 @@ clojure {
             aotNamespaces.add("retroact.swing.compiled.retroact-invocation-event")
             aotNamespaces.add("retroact.swing.compiled.retroact-event-queue")
             aotNamespaces.add("retroact.swing.compiled.transferable")
+            aotNamespaces.add("retroact.swing.compiled.identity-wrapper")
         }
     }
 }

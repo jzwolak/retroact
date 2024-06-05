@@ -113,6 +113,18 @@
   (and (not (nil? old-sub-comp))
        (nil? new-sub-comp)))
 
+(defn- create-ctx [app-ref app-val]
+  (let [ctx {:app-ref app-ref :app-val app-val}
+        ctx (assoc ctx :attr-appliers (merge (tk/get-in-toolkit-config ctx :attr-appliers)
+                                             (get-in app-val [:retroact :attr-appliers])
+                                             retroact-attr-appliers))]
+    ctx))
+
+(defn- assoc-component-ctx [ctx onscreen-component new-view]
+  (assoc ctx :onscreen-component onscreen-component
+             :old-view (tk/get-view ctx onscreen-component)
+             :new-view new-view))
+
 (defn- apply-component-applier
   [attr-applier component ctx attr old-view new-view]
   (let [get-sub-comp (:get attr-applier)
@@ -125,8 +137,13 @@
         (let [sub-component (build-ui ctx new-sub-view)]
           (tk/run-on-toolkit-thread ctx set-sub-comp component ctx sub-component))
       (should-update-sub-comp? old-sub-view new-sub-view)
-        (apply-attributes (assoc ctx :onscreen-component (tk/run-on-toolkit-thread-with-result ctx get-sub-comp component ctx)
-                                     :old-view old-sub-view :new-view new-sub-view))
+        (apply-attributes
+          ; NOTE: I left :old-view here so that it doesn't break things. Because in some cases the onscreen-component
+          ; may not have the view. See swing/set-client-prop. It ignores non-JComponent objects.
+          (assoc
+            (assoc-component-ctx
+              ctx (tk/run-on-toolkit-thread-with-result ctx get-sub-comp component ctx) new-sub-view)
+            :old-view old-sub-view))
       (should-remove-sub-comp? old-sub-view new-sub-view) (tk/run-on-toolkit-thread ctx set-sub-comp component ctx nil)
       :default (do)                                         ; no-op. Happens if both are nil or they are equal
       )))
@@ -337,7 +354,7 @@
   "Take a view and realize it."
   [ctx view]
   (let [onscreen-component (instantiate-class ctx view)]
-    (apply-attributes (assoc (dissoc ctx :old-view) :onscreen-component onscreen-component :new-view view))))
+    (apply-attributes (assoc-component-ctx ctx onscreen-component view))))
 
 
 (defn component-did-mount? [old-value new-value]
@@ -455,6 +472,24 @@
     (apply-attributes (assoc ctx :onscreen-component onscreen-component))
     onscreen-component))
 
+(defn update
+  "Updates an onscreen component to match view. app-ref must be a Retroact managed app-ref - this is where Retroact
+  state and configuration will be retrieved including the current toolkit and custom attribute appliers. update does
+  not add the onscreen-component to Retroact managed components. This is a once off update. This is useful for
+  rendering new components using Retroact style maps. If the onscreen component was updated using this fn previously
+  then future calls will also work because the view state will be stored just like Retroact managed components. This
+  can be useful for popup menus, dialogs, and other short lived components that won't change wrt state but will
+  trigger an action from their internal state."
+  [app-ref app-val onscreen-component view]
+  {:pre [(not (nil? onscreen-component))
+         (map? view)]}
+  (let [ctx (create-ctx app-ref app-val)
+        ctx (assoc-component-ctx ctx onscreen-component view)]
+    #_(log/info "updating old to new view for" onscreen-component)
+    #_(log/info (:old-view ctx))
+    #_(log/info (:new-view ctx))
+    (update-onscreen-component ctx)))
+
 (defn- get-render-fn [comp]
   (get comp :render (fn default-render-fn [app-ref app-value]
                       (log/warn "component did not provide a render fn"))))
@@ -494,7 +529,7 @@
       (run-component-did-mount ctx updated-comp))
     (when (and onscreen-component updated-onscreen-component)
       (run-component-did-update ctx updated-comp))
-    (assoc comp :view new-view :onscreen-component updated-onscreen-component)))
+    updated-comp))
 
 (defn- update-components [ctx components]
   ; app has a value for components representing the retroact views of the components, but components contains the
@@ -543,13 +578,6 @@
   (doseq [[app-ref components] app-ref->components]
     (doseq [[comp-id component] components]
       (log/info comp-id "->" (:onscreen-component component)))))
-
-(defn- create-ctx [app-ref app-val]
-  (let [ctx {:app-ref app-ref :app-val app-val}
-        ctx (assoc ctx :attr-appliers (merge (tk/get-in-toolkit-config ctx :attr-appliers)
-                                             (get-in app-val [:retroact :attr-appliers])
-                                             retroact-attr-appliers))]
-    ctx))
 
 (defn- execute-main-loop-single-iteration [chans]
   ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here because

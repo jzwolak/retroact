@@ -1,7 +1,7 @@
 (ns retroact.swing.jlist
   (:require [clojure.tools.logging :as log]
             [retroact.toolkit :as tk])
-  (:import (java.awt BorderLayout)
+  (:import (java.awt BorderLayout Color)
            (javax.swing DefaultListModel JList JPanel ListCellRenderer)))
 
 (defn redraw-onscreen-component-substitute [& _])
@@ -14,7 +14,8 @@
      :contents [(assoc (render-fn app-ref app-val cell-value index is-selected has-focus)
                   :constraints BorderLayout/CENTER)]}))
 
-(defn- create-retroact-cell-renderer [ctx render-fn]
+; TODO: make this work for other components that use ListCellRenderer, like JComboBox
+(defn create-retroact-cell-renderer [ctx render-fn]
   (let [update-component (:update-component ctx)
         ctx (assoc-in ctx [:app-val :retroact :toolkit-config :redraw-onscreen-component] `redraw-onscreen-component-substitute)
         _ (log/info "redraw-onscreen-component-substitute is" (get-in ctx [:app-val :retroact :toolkit-config :redraw-onscreen-component]))

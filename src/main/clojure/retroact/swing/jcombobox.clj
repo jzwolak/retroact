@@ -1,8 +1,11 @@
 (ns retroact.swing.jcombobox
+  (:require [retroact.swing.jlist :as jlist])
   (:import (javax.swing DefaultComboBoxModel JComboBox)))
 
-(defn create-jcombobox [ctx]
-  (let [jcombobox (JComboBox. (DefaultComboBoxModel.))]
-    ; If I decide to use this, see jlist namespace for implementation and perhaps just call the jlist fn.
-    #_(.setCellRenderer jcombobox (create-cell-renderer))
-    jcombobox))
+(defn create-jcombobox [{:keys [view] :as ctx}]
+  (if-let [render-fn (:render view)]
+    (let [jcombobox (JComboBox. (DefaultComboBoxModel.))]
+      (.setRenderer jcombobox (jlist/create-retroact-cell-renderer ctx render-fn))
+      jcombobox)
+    (let [jcombobox (JComboBox. (DefaultComboBoxModel.))]
+      jcombobox)))

@@ -11,9 +11,9 @@
 
 (defn- create-border
   [border-spec]
-  (let [border-spec (if (keyword? border-spec) [border-spec] border-spec)
-        [type arg1 arg2 arg3 arg4 arg5 arg6] border-spec]
-    (condp = [type (dec (count border-spec))]
+  (let [border-spec (if (vector? border-spec) border-spec [border-spec])
+        [type-or-border arg1 arg2 arg3 arg4 arg5 arg6] border-spec]
+    (condp = [type-or-border (dec (count border-spec))]
       [:bevel 1] (BorderFactory/createBevelBorder arg1)
       [:bevel 3] (BorderFactory/createBevelBorder arg1 (create-color arg2) (create-color arg3))
       [:bevel 5] (BorderFactory/createBevelBorder arg1 (create-color arg2) (create-color arg3) (create-color arg4) (create-color arg5))
@@ -43,7 +43,10 @@
       [:titled 4] (BorderFactory/createTitledBorder (create-border arg1) arg2 arg3 arg4)
       [:titled 5] (BorderFactory/createTitledBorder (create-border arg1) arg2 arg3 arg4 (create-font arg5))
       [:titled 6] (BorderFactory/createTitledBorder (create-border arg1) arg2 arg3 arg4 (create-font arg5) (create-color arg6))
-      )))
+      (if (instance? Border type-or-border)
+        type-or-border
+        (throw (IllegalArgumentException.
+                 (str "expected vector, keyword, or Border and got " (class type-or-border))))))))
 
 (defn set-border
   "If supplied border is a Border instance, use it. Otherwise, it should be a keyword or a vector. A keyword is used

@@ -48,6 +48,14 @@
         (throw (IllegalArgumentException.
                  (str "expected vector, keyword, or Border and got " (class type-or-border))))))))
 
+(defn- set-border-by-fn
+  [c ctx border set-border-fn]
+  (cond
+    (keyword? border) (set-border-fn c (create-border [border]))
+    (vector? border) (set-border-fn c (create-border border))
+    (instance? Border border) (set-border-fn c border)
+    :else (throw (Exception. (str "provided attr val is neither a Border nor a vector: " border)))))
+
 (defn set-border
   "If supplied border is a Border instance, use it. Otherwise, it should be a keyword or a vector. A keyword is used
    for a border with no arguments and a vector is used for a border that needs arguments to construct it. The first
@@ -56,8 +64,8 @@
    createLoweredSoftBevelBorder -> :lowered-soft-bevel, createTitledBorder -> :titled, etc.. The remaining elements
    in the vector are args to the respective BorderFactory method."
   [c ctx border]
-  (cond
-    (keyword? border) (.setBorder c (create-border [border]))
-    (vector? border) (.setBorder c (create-border border))
-    (instance? Border border) (.setBorder c border)
-    :else (throw (Exception. (str "provided attr val is neither a Border nor a vector: " border)))))
+  (set-border-by-fn c ctx border (fn [c border] (.setBorder c border))))
+
+(defn set-viewport-border
+  [c ctx border]
+  (set-border-by-fn c ctx border (fn [c border] (.setViewportBorder c border))))

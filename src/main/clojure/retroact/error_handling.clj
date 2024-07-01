@@ -7,7 +7,7 @@
     (.uncaughtException uncaught-ex-handler current-thread ex)))
 
 (defn capture-stack [ctx f]
-  (let [prison (RuntimeException. (str "captured stack for view " (select-keys (:new-view ctx) [:comp-id :name :class]) " and fn " f))]
+  (let [prison (RuntimeException. (str "captured stack for view " (select-keys (:new-view ctx) [:comp-id :id :name :class]) " and fn " f))]
     (fn [& args]
       (try
         (apply f args)

@@ -187,9 +187,10 @@
   (set-client-prop onscreen-component "view" view))
 
 (defn get-view [onscreen-component]
+  (get-client-prop onscreen-component "view")
   ; TODO: this loop should really not be necessary and may even cause problems. The view should always be on the
   ; component or just not present in the case of non-JComponent components.
-  (loop [oc onscreen-component]
+  #_(loop [oc onscreen-component]
     #_(log/info "get-view got view =" (apply str (take 100 (if oc (get-client-prop oc "view")))))
     (let [view (if oc (get-client-prop oc "view"))]
       (cond
@@ -369,7 +370,7 @@
       )))
 
 (defn set-editable [c ctx editable]
-  (set-property c editable #(.getEditable %) #(.setEditable %1 %2)))
+  (set-property c editable #(.isEditable %) #(.setEditable %1 %2)))
 
 (defn- set-title [c ctx title]
   (.setTitle c title))
@@ -377,13 +378,18 @@
 (defn- set-tool-tip-text [c ctx tool-tip-text]
   (.setToolTipText c tool-tip-text))
 
-(defn set-width [c ctx width]
-  (let [view-width (get-in ctx [:old-view :width])
-        onscreen-width (.getWidth c)
-        height (.getHeight c)]
-    (when (and (not= view-width onscreen-width) (not= onscreen-width width))
-      (log/warn "onscreen width changed outside Retroact since last update. view-width =" view-width ", onscreen-width =" onscreen-width ", new-width =" width))
-    (.setSize c (Dimension. width height))))
+(defn- set-width [c ctx width]
+  (if (nil? width)
+    (let [view (get-view c)]
+      #_(log/info "current view for component:" view)
+      #_(log/info "new view for component:" (:new-view ctx))
+      #_(log/info "view (?) for component:" (:view ctx))
+      (log/warn "skipping setting of width for component c because width is null. c =" c))
+    (let [                                                  ;size (.getSize c)
+          height (.getHeight ^Component c)]
+      #_(log/info "height =" height)
+      #_(log/info "size =" size)
+      (.setSize c (Dimension. width height)))))
 
 (defn- set-some-width [width getter-fn setter-fn]
   (let [dimension (getter-fn)
@@ -818,6 +824,7 @@
    :text                   set-text
    :title                  set-title
    :tool-tip-text          set-tool-tip-text
+   :viewport-border        borders/set-viewport-border
    :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
                             :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))

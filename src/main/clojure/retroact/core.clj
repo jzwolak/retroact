@@ -9,7 +9,8 @@
             [retroact.toolkit :as tk])
   (:import (clojure.lang Agent Atom Ref)
            (java.awt EventQueue)
-           (java.lang.ref WeakReference)))
+           (java.lang.ref WeakReference)
+           (javax.swing JDialog)))
 
 ; TODO: add ability to register exception handler. Wrap all calls to component-did-mount and component-did-update with
 ; try-catch and call registered exception handlers. Wrap outer loop of retroact main loop in try catch to add a fail
@@ -295,6 +296,12 @@
   [{:keys [onscreen-component app-val old-view new-view attr-appliers] :as ctx}]
   #_(log/info "applying attributes" (:class new-view) "log msg3")
   #_(log/info "onscreen-component class =" (class onscreen-component))
+  #_(when (instance? JDialog onscreen-component)
+    (log/info "dialog: old-view =" old-view)
+    (log/info "dialog: new-view =" new-view)
+    (log/info "dialog: select keys of ctx:" (select-keys ctx [:view :old-view :new-view]))
+    (log/info (Exception.) "stack trace")
+    )
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (tk/assoc-ctx (assoc ctx :view old-view) onscreen-component)
     ; Use old-view and new-view to get attribute keys because a key may be removed and that will be treated like
@@ -468,7 +475,11 @@
 (defn- update-onscreen-component [{:keys [onscreen-component old-view new-view] :as ctx}]
   (let [reusable (onscreen-component-reusable? ctx onscreen-component old-view new-view)
         onscreen-component (if reusable onscreen-component (instantiate-class ctx new-view))
-        ctx (if reusable ctx (assoc ctx :old-view (tk/get-view ctx onscreen-component)))]
+        ;_ (log/info "update-onscreen-component: old-view (before) =" old-view)
+        old-view (tk/get-view ctx onscreen-component)
+        ;_ (log/info "update-onscreen-component: old-view (after)  =" old-view)
+        ;_ (log/info "update-onscreen-component: onscreen-component =" onscreen-component)
+        ctx (if reusable ctx (assoc ctx :old-view old-view))]
     (apply-attributes (assoc ctx :onscreen-component onscreen-component))
     onscreen-component))
 
@@ -517,6 +528,7 @@
         onscreen-component (:onscreen-component comp)
         update-onscreen-component (or (:update-onscreen-component comp) update-onscreen-component)
         new-view (render app-ref app-val)
+        ;_ (log/info "update-component: old-view? =" view)
         updated-onscreen-component
         (if (or (not onscreen-component) (not= view new-view))
           (update-onscreen-component
@@ -617,9 +629,15 @@
                            components (get-in @retroact-state [:app-ref->components app-ref] {})
                            comp-id (:comp-id component)
                            component-exists (contains? components comp-id)
+                           ;_ (log/info "dialog debug: component-exists =" component-exists)
+                           ;_ (log/info "dialog debug: component-id =" comp-id)
                            component (if component-exists
                                        (merge (get components comp-id) component)
                                        component)
+                           ;_
+                           #_(when (= :new-molecule-dialog comp-id)
+                               (log/info "new molecule dialog component =" component)
+                               (log/info "old-view =" (:old-view ctx)))
                            next-component (update-component ctx component)
                            next-components (assoc components comp-id next-component)]
                        (when (and component-exists (:onscreen-component next-component))

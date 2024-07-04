@@ -11,7 +11,8 @@
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
-            [retroact.swing.jcombobox :refer [create-jcombobox]])
+            [retroact.swing.jcombobox :refer [create-jcombobox]]
+            [retroact.toolkit.property-getters-setters :refer [set-property]])
   (:import (clojure.lang ArityException Atom)
            (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit Window)
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
@@ -105,14 +106,13 @@
     (.getView (.getViewport c))
     c))
 
+(defn- set-property-on-root-pane [c new-value getter setter]
+  (let [c (if (instance? RootPaneContainer c) (.getContentPane c) c)]
+    (set-property c new-value getter setter)))
+
 (defn redraw-onscreen-component [c]
   (.revalidate c)
   (.repaint c))
-
-(defn- get-default [component getter]
-  (let [new-instance (.newInstance (.getConstructor (class component) (into-array Class [])) (into-array Object []))
-        default-value (getter new-instance)]
-    default-value))
 
 (defn- run-on-toolkit-thread-internal [f & args]
   #_@event-queue/event-queue-register
@@ -329,20 +329,11 @@
         (do
           (text-change-handler document-event))))))
 
-(defn- set-property
-  "Sets a property on a component that potentially has a ContentPane. If new-value is null, then the default will be
-  used."
-  [c new-value getter setter]
-  (let [new-value (if (nil? new-value) (get-default c getter) new-value)]
-    (cond
-      (instance? RootPaneContainer c) (setter (.getContentPane c) new-value)
-      :else (setter c new-value))))
-
 (defn- set-background [c ctx color]
-  (set-property c (create/create-color color) #(.getBackground %) #(.setBackground %1 %2)))
+  (set-property-on-root-pane c (create/create-color color) #(.getBackground %) #(.setBackground %1 %2)))
 
 (defn set-foreground [c ctx color]
-  (set-property c (create/create-color color) #(.getForeground %) #(.setForeground %1 %2)))
+  (set-property-on-root-pane c (create/create-color color) #(.getForeground %) #(.setForeground %1 %2)))
 
 (defn update-client-properties [c ctx properties]
   (let [{:keys [old-view attr]} ctx
@@ -370,7 +361,12 @@
       )))
 
 (defn set-editable [c ctx editable]
-  (set-property c editable #(.isEditable %) #(.setEditable %1 %2)))
+  (set-property-on-root-pane c editable #(.isEditable %) #(.setEditable %1 %2)))
+
+(defn- set-enabled [c ctx enabled]
+  (set-property-on-root-pane c enabled #(.isEnabled %) (fn [c e]
+                                                         (log/info "set-enabled:" e c)
+                                                         (.setEnabled c ^boolean (boolean e)))))
 
 (defn- set-title [c ctx title]
   (.setTitle c title))
@@ -637,7 +633,7 @@
       (.setRowEditableFn model row-editable-fn))))
 
 (defn set-opaque [c ctx opaque]
-  (set-property c opaque #(.isOpaque %) #(.setOpaque %1 %2)))
+  (set-property-on-root-pane c opaque #(.isOpaque %) #(.setOpaque %1 %2)))
 
 (defn set-row-selection-interval [c ctx [start end]]
   (if (instance? JScrollPane c)
@@ -792,8 +788,7 @@
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
    :editable               set-editable
-   :enabled                (fn set-enabled [c ctx enabled]
-                             (.setEnabled c ^boolean (boolean enabled)))
+   :enabled                (fn set-enabled [c ctx enabled] (.setEnabled c ^boolean (boolean enabled)))                                 ;set-enabled
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}

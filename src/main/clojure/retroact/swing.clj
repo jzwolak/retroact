@@ -364,9 +364,7 @@
   (set-property-on-root-pane c editable #(.isEditable %) #(.setEditable %1 %2)))
 
 (defn- set-enabled [c ctx enabled]
-  (set-property-on-root-pane c enabled #(.isEnabled %) (fn [c e]
-                                                         (log/info "set-enabled:" e c)
-                                                         (.setEnabled c ^boolean (boolean e)))))
+  (set-property-on-root-pane c enabled #(.isEnabled %) (fn [c e] (.setEnabled c ^boolean (boolean e)))))
 
 (defn- set-title [c ctx title]
   (.setTitle c title))
@@ -376,15 +374,8 @@
 
 (defn- set-width [c ctx width]
   (if (nil? width)
-    (let [view (get-view c)]
-      #_(log/info "current view for component:" view)
-      #_(log/info "new view for component:" (:new-view ctx))
-      #_(log/info "view (?) for component:" (:view ctx))
-      (log/warn "skipping setting of width for component c because width is null. c =" c))
-    (let [                                                  ;size (.getSize c)
-          height (.getHeight ^Component c)]
-      #_(log/info "height =" height)
-      #_(log/info "size =" size)
+    (log/warn "skipping setting of width for component c because width is null. c =" c)
+    (let [height (.getHeight ^Component c)]
       (.setSize c (Dimension. width height)))))
 
 (defn- set-some-width [width getter-fn setter-fn]
@@ -788,7 +779,7 @@
    :description            {:recreate [FileNameExtensionFilter]}
    :dialog-type            (fn set-dialog-type [c ctx dialog-type] (.setDialogType c dialog-type))
    :editable               set-editable
-   :enabled                (fn set-enabled [c ctx enabled] (.setEnabled c ^boolean (boolean enabled)))                                 ;set-enabled
+   :enabled                set-enabled
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}

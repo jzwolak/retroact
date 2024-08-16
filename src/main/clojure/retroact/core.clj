@@ -77,6 +77,10 @@
   (swap! retroact-thread-id inc))
 
 
+(defn comp-summary [comp]
+  (select-keys comp #{:comp-id :name :class}))
+
+
 (defn component-applier? [attr-applier]
   (and (map? attr-applier)
        (contains? attr-applier :set)
@@ -412,7 +416,6 @@
     (go (>! @retroact-cmd-chan cmd))))
 
 (defn- trigger-update-view [app-ref app-val]
-  (log/info "update triggered by" (EventQueue/getCurrentEvent))
   (run-on-app-ref-chan app-ref [:update-view app-ref app-val]))
 
 (defn app-watch
@@ -629,15 +632,9 @@
                            components (get-in @retroact-state [:app-ref->components app-ref] {})
                            comp-id (:comp-id component)
                            component-exists (contains? components comp-id)
-                           ;_ (log/info "dialog debug: component-exists =" component-exists)
-                           ;_ (log/info "dialog debug: component-id =" comp-id)
                            component (if component-exists
                                        (merge (get components comp-id) component)
                                        component)
-                           ;_
-                           #_(when (= :new-molecule-dialog comp-id)
-                               (log/info "new molecule dialog component =" component)
-                               (log/info "old-view =" (:old-view ctx)))
                            next-component (update-component ctx component)
                            next-components (assoc components comp-id next-component)]
                        (when (and component-exists (:onscreen-component next-component))
@@ -660,14 +657,10 @@
 
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
-  (log/error "test logging from retroact")
   (loop [chans [retroact-cmd-chan]]
     (let [new-chans
           (try
-            (log/error "about to execute retroact single iteration main loop")
-            (let [temp-chans (execute-main-loop-single-iteration chans)]
-              (log/error "no exception thrown in retroact")
-              temp-chans)
+            (execute-main-loop-single-iteration chans)
             (catch Exception ex
               (log/error ex "unhandled exception encountered in retroact main loop, logging and passing to uncaught exception handler")
               (handle-uncaught-exception ex)
@@ -695,7 +688,8 @@
   (condp instance? app-ref
     Atom (apply swap! app-ref f args)
     Ref (dosync (apply alter app-ref f args) @app-ref)
-    Agent (do (apply send app-ref f args) @app-ref)))
+    Agent (do (apply send app-ref f args) @app-ref)
+    (throw (IllegalStateException. (str "Type of app-ref is not one of Atom, Ref, or Agent. Instead it's " (class app-ref))))))
 
 (defn- check-side-effect-structure
   [side-effect]

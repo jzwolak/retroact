@@ -1,5 +1,6 @@
 (ns retroact.swing.borders
-  (:require [retroact.swing.create-fns :refer [create-color create-font]])
+  (:require [clojure.tools.logging :as log]
+            [retroact.swing.create-fns :refer [create-color create-font]])
   (:import (javax.swing BorderFactory Icon)
            (javax.swing.border Border EmptyBorder)))
 
@@ -54,6 +55,9 @@
     (keyword? border) (set-border-fn c (create-border [border]))
     (vector? border) (set-border-fn c (create-border border))
     (instance? Border border) (set-border-fn c border)
+    (nil? border) (do
+                    (log/warn "setting border to null, but it may be better to get the default border on a new component and use it")
+                    (set-border-fn c nil))
     :else (throw (Exception. (str "provided attr val is neither a Border nor a vector: " border)))))
 
 (defn set-border

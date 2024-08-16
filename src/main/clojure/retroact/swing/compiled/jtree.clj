@@ -37,8 +37,9 @@
 (defn- default-tree-model-fn [default-tree-root data] [default-tree-root {default-tree-root data}])
 
 (defn- print-tree-paths [print-prefix tree-paths]
-  (when (= 0 (count tree-paths))
-    (log/info print-prefix "no tree paths to print"))
+  (cond
+    (nil? tree-paths) (log/info print-prefix "tree-paths == nil")
+    (= 0 (count tree-paths)) (log/info print-prefix "no tree paths to print"))
   (doseq [tree-path tree-paths]
     (log/info print-prefix (.getPath tree-path))
     (doseq [path-part (.getPath tree-path)]
@@ -88,10 +89,12 @@
         (doseq [listener listeners]
           (.treeStructureChanged listener tree-model-event))))
     (when (not= old-tree-selection new-tree-selection)
-      (let [tree-paths (mapv (fn [path] (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+      (let [tree-paths (mapv (fn [path]
+                               (when (nil? path) (log/warn "jtree creating TreePath with nil object"))
+                               (when (some nil? path) (log/warn "some element of path is nil:" path))
+                               (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
                              new-tree-selection)]
-        #_(print-tree-paths "would be tree-path:" tree-paths)
-        #_(print-tree-paths "actual   tree-path:" (.getSelectionPaths tree-component))
+        (when (some nil? tree-paths) (log/warn "some tree path is nil"))
         (.setSelectionPaths tree-component (into-array TreePath tree-paths))))
     (when (not= old-tree-scroll-path new-tree-scroll-path)
       (scroll-path-to-visible tree-component new-value))))

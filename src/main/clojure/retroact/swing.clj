@@ -867,6 +867,8 @@
    :row-fn                 set-row-fn
    :table-data             set-table-data
    ; Tree attr appliers
+   ; TODO: implement this to set the scrolls on expand of JTree
+   ;:scrolls-on-expand      set-scrolls-on-expand
    :tree-render-fn         set-tree-render-fn
    :tree-model-fn          set-tree-model-fn
    :tree-selection-fn      set-tree-selection-fn

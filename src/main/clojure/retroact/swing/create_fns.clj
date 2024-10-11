@@ -4,7 +4,10 @@
            (javax.swing Box JDialog JOptionPane JTextArea)
            (javax.swing.filechooser FileNameExtensionFilter)))
 
-(defn create-color [color]
+(defn create-color
+  "Takes a value that is a Color object, a vector, or a valid arg to the Color constructor.
+   For example: Color/WHITE, [255 255 255], 0xFFFFFF"
+  [color]
   (cond
     (nil? color) nil
     (instance? Color color) color

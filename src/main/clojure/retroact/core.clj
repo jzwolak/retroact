@@ -298,14 +298,6 @@
   updated to look like what should be rendered at spot 1. The component is reused. Avoid this by using :id on the
   rendered results."
   [{:keys [onscreen-component app-val old-view new-view attr-appliers] :as ctx}]
-  #_(log/info "applying attributes" (:class new-view) "log msg3")
-  #_(log/info "onscreen-component class =" (class onscreen-component))
-  #_(when (instance? JDialog onscreen-component)
-    (log/info "dialog: old-view =" old-view)
-    (log/info "dialog: new-view =" new-view)
-    (log/info "dialog: select keys of ctx:" (select-keys ctx [:view :old-view :new-view]))
-    (log/info (Exception.) "stack trace")
-    )
   (when (not (= old-view new-view))                           ; short circuit - do nothing if old and new are equal.
     (tk/assoc-ctx (assoc ctx :view old-view) onscreen-component)
     ; Use old-view and new-view to get attribute keys because a key may be removed and that will be treated like
@@ -319,15 +311,13 @@
           ; to be moved to apply-attributes or recursive itself.
           (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
           (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
-          ; Assume attr-applier is a fn and call it on the component.
+          ; Assume attr-applier is a fn and call it on the component. But only when attribute val changed.
           :else (if (or (not (= (get old-view attr) (get new-view attr)))
-                          (not (= (contains? old-view attr) (contains? new-view attr))))
+                        (not (= (contains? old-view attr) (contains? new-view attr))))
                   (do
-                    (when (= attr :text)
-                      (log/info "in apply-attributes and got :text (model name) new =" (get new-view attr) ", old =" (get old-view attr)))
                     (tk/run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
-                                           (assoc ctx :attr attr)
-                                           (get new-view attr)))))))
+                                              (assoc ctx :attr attr)
+                                              (get new-view attr)))))))
     ; Some code relies on the value of view to be the old view until attr appliers complete. But eventually it'd be
     ; nice to remove this in favor of assoc-ctx, but beware since there's an assoc-ctx at the beginning of this fn.
     ; So maybe ctx won't work for this because it will change just before calling the appliers.
@@ -405,6 +395,7 @@
 
 (defn- run-on-app-ref-chan
   [app-ref cmd]
+  (log/info "run-on-app-ref-chan enqueueing cmd for app-ref" (System/identityHashCode app-ref))
   (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) cmd)))
 
 (defn- run-cmd
@@ -600,6 +591,7 @@
   ; pure fns are supposed to be used to render view from state).
   (let [[val port] (alts!! chans :priority true)
         cmd-name (first val)]
+    (log/info "retroact-main-loop executing cmd" cmd-name)
     (condp = cmd-name
       ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
       ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
@@ -664,9 +656,7 @@
             (catch Exception ex
               (log/error ex "unhandled exception encountered in retroact main loop, logging and passing to uncaught exception handler")
               (handle-uncaught-exception ex)
-              chans)
-            (finally
-              (log/error "just a retroact log message in the finally block to be sure...")))]
+              chans))]
       (cond
         (= :shutdown new-chans) (log/trace "retroact clean shutdown")
         new-chans (recur new-chans)

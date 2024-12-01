@@ -2,7 +2,8 @@
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference]]
             [clojure.tools.logging :as log]
-            [retroact.swing :refer [assoc-view redraw-onscreen-component]])
+            [retroact.swing :refer [redraw-onscreen-component]]
+            [retroact.swing.util :refer [assoc-view]])
   (:import (clojure.lang Agent Atom Ref)
            (java.beans Introspector)))
 

@@ -1,6 +1,6 @@
 (ns examples.drag-and-drop
   (:require [clojure.tools.logging :as log]
-            [retroact.swing :refer [get-view]])
+            [retroact.swing.util :refer [get-view]])
   (:import (java.awt BorderLayout Color)
            (java.awt.datatransfer StringSelection)
            (javax.swing TransferHandler)))

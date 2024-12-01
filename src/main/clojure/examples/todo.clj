@@ -1,7 +1,7 @@
 (ns examples.todo
   (:require [retroact.core :refer [init-app create-comp]]
             [clojure.tools.logging :as log]
-            [retroact.swing :refer [get-view]])
+            [retroact.swing.util :refer [get-view]])
   (:import (java.awt BorderLayout Color Insets)
            (javax.swing.border LineBorder)
            (javax.swing BorderFactory)))

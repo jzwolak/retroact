@@ -6,17 +6,19 @@
             [retroact.swing.create-fns :as create]
             [retroact.swing.borders :as borders]
             [retroact.swing.event-queue :as event-queue]
+            [retroact.swing.listeners :as listeners]
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
+            [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
   (:import (clojure.lang ArityException Atom)
            (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit Window)
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
-           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter WindowAdapter)
+           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (java.util WeakHashMap)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
@@ -25,6 +27,7 @@
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)
+           (retroact.swing.compiled.listeners RetroactSwingListener)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -51,21 +54,8 @@
 ;
 
 
-(def client-prop-prefix "retroact-")
-
-; put object as key and IdentityWrapper as value in :object->identity. No get will ever be called. This is just to
-; create a reference to the IdentityWrapper so it won't be garbage collected until the component is garbage collected.
-; Note that this means we don't care about changes to the hash code because we're never looking up the component in
-; this map. In addition, the component's weak ref key can be removed because even if the hash code has changed since the
-; component was added, it doesn't matter, the WeakHashMap would not be able to get the hash code anyway.
-; The :identity->props WeakHashMap will have an IdentityWrapper as the key (same as the IdentityWrapper that appears as
-; the value for the component in the previous map) and this is used to actually lookup the component's properties.
-(defonce object->identity (WeakHashMap.))
-(defonce identity->props (WeakHashMap.))
 #_(defonce comp->props (atom {:object->identity (WeakHashMap.)
                             :identity->props (WeakHashMap.)}))
-
-(defonce silenced-events (atom #{}))
 
 ; This holds a number for retroact initiated invocations on the EDT. Each invocation increments this value on start and
 ; decrements on finish. This allows other events enqueued on the event queue to be marked as initiated by Retroact.
@@ -76,25 +66,13 @@
 ; initiated.
 (def retroact-initiated (atom 0))
 
-(declare get-view)
-(declare get-ctx)
-(declare get-client-prop)
-(declare set-client-prop)
-
-(defn get-comp-id [onscreen-component]
-  (if-let [comp-id (get-client-prop onscreen-component "comp-id")]
-    comp-id
-    (let [comp-id (str (gensym "comp-id-"))]
-      (set-client-prop onscreen-component "comp-id" comp-id)
-      comp-id)))
-
 (defn create-handler-context [ctx onscreen-component]
   ; ctx from onscreen-component has :old-view, :new-view, and :view, where :view is equal to either :old-view or
   ; :new-view depending on if an update is running or finished, respectively.
   ; Except that all those views may be wrong because ctx is captured when the handler is first assigned. If the handler
   ; doesn't change then the ctx won't be updated. So I'm setting :view. I hope it doesn't break anything.
-  (assoc (merge ctx (get-ctx onscreen-component))
-    :view (get-view onscreen-component)
+  (assoc (merge ctx (util/get-ctx onscreen-component))
+    :view (util/get-view onscreen-component)
     :onscreen-component onscreen-component
     :app-val @(:app-ref ctx)))
 
@@ -155,62 +133,6 @@
     (and (SwingUtilities/isEventDispatchThread) (> @retroact-initiated 0)))
   #_(event-queue/retroact-initiated?))
 
-(defmulti set-client-prop
-          "Call on EDT. Sets a client property and has a mechanism for non-JComponent objects to set a property."
-          (fn [comp name value] (class comp)))
-(defmethod set-client-prop JComponent [comp name value]
-  (.putClientProperty comp (str client-prop-prefix name) value))
-(defmethod set-client-prop Object [comp name value]
-  ; ignore. Or possibly in the future use an internal map of (map comp -> ( map name -> value) )
-  ; Which would require removing things from the map when they are removed from the view. WeakReference may help with
-  ; this.
-  ; The following will fail concurrency. Because object->identity and identity->props are WeakHashMap objects modified
-  ; within swap!. Furthermore, two calls to put could happen simultaneously from different threads.
-  (let [id-wrapper (IdentityWrapper. comp)
-        props (get identity->props id-wrapper {})]
-    (when (not (contains? identity->props id-wrapper))
-      (.put object->identity comp id-wrapper))
-    (.put identity->props id-wrapper (assoc props name value))))
-
-(defmulti get-client-prop
-          "Call on EDT. Gets a client property for all objects including non-JComponent."
-          (fn [comp name] (class comp)))
-(defmethod get-client-prop JComponent [comp name]
-  (let [val
-        (.getClientProperty comp (str client-prop-prefix name))]
-    val))
-(defmethod get-client-prop Object [comp name]
-  (let [id-wrapper (IdentityWrapper. comp)]
-    (get-in identity->props [id-wrapper name])))
-
-(defn assoc-view [onscreen-component view]
-  (set-client-prop onscreen-component "view" view))
-
-(defn get-view [onscreen-component]
-  (get-client-prop onscreen-component "view")
-  ; TODO: this loop should really not be necessary and may even cause problems. The view should always be on the
-  ; component or just not present in the case of non-JComponent components.
-  #_(loop [oc onscreen-component]
-    #_(log/info "get-view got view =" (apply str (take 100 (if oc (get-client-prop oc "view")))))
-    (let [view (if oc (get-client-prop oc "view"))]
-      (cond
-        view view
-        (or (nil? oc) (not (instance? Component oc))) nil
-        :else (recur (.getParent oc))))))
-
-(defn- get-view-or-identity [c] (or (get-view c) c))
-
-(defn assoc-ctx [onscreen-component ctx]
-  #_(log/info "assoc-ctx, ctx :new-view =" (:new-view ctx))
-  (set-client-prop onscreen-component "ctx" ctx))
-
-(defn get-ctx [onscreen-component]
-  (let [ctx (if onscreen-component (get-client-prop onscreen-component "ctx"))]
-    (cond
-      ctx ctx
-      (or (nil? onscreen-component) (not (instance? Component onscreen-component))) nil
-      :else (recur (.getParent onscreen-component)))))
-
 (def on-close-action-map
   {:dispose JFrame/DISPOSE_ON_CLOSE
    :do-nothing JFrame/DO_NOTHING_ON_CLOSE
@@ -221,119 +143,17 @@
   {:vertical JSplitPane/VERTICAL_SPLIT
    :horizontal JSplitPane/HORIZONTAL_SPLIT})
 
-(defn reify-action-listener
-  [action-handler]
-  (reify ActionListener
-    (actionPerformed [this action-event]
-      (action-handler action-event))))
-
-(defn reify-change-listener
-  [change-handler]
-  (reify ChangeListener
-    (stateChanged [this change-event]
-      (change-handler change-event))))
-
-(defn reify-component-resize-listener
-  [component-resize-handler]
-  (proxy [ComponentAdapter] []
-    (componentResized [component-event]
-      (component-resize-handler component-event))))
-
-(defn reify-component-hidden-listener
-  [handler]
-  (proxy [ComponentAdapter] []
-    (componentHidden [component-event]
-      (handler component-event))))
-
-(defn reify-property-change-listener
-  [property-change-handler]
-  (reify PropertyChangeListener
-    (propertyChange [this property-change-event]
-      (property-change-handler property-change-event))))
-
-(defn proxy-window-listener-close [app-ref onscreen-component handler]
-  (proxy [WindowAdapter] []
-    (windowClosing [window-event]
-      (handler app-ref onscreen-component window-event))))
-
-(defn proxy-mouse-listener-click [app-ref click-handler]
-  (proxy [MouseAdapter] []
-    (mousePressed [mouse-event]
-      (click-handler app-ref mouse-event))
-    (mouseClicked [mouse-event]
-      (click-handler app-ref mouse-event))))
-
-(defn proxy-focus-gained [ctx focus-gained-handler]
-  (proxy [FocusAdapter] []
-    (focusGained [focus-event]
-      (focus-gained-handler ctx focus-event))))
-
-(defn proxy-focus-lost [ctx focus-lost-handler]
-  (proxy [FocusAdapter] []
-    (focusLost [focus-event]
-      (focus-lost-handler ctx focus-event))))
-
-(defn reify-tree-selection-listener [ctx selection-change-handler]
-  (reify TreeSelectionListener
-    (valueChanged [this event]
-      (let [onscreen-component (.getSource event)
-            ; TODO: I should also pass in the event to the selection-change-handler because selected values don't
-            ; indicate the path and the same value may be at multiple leafs.
-            selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
-        (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
-
-(defn reify-list-selection-listener [ctx selection-change-handler]
-  (reify ListSelectionListener
-    (valueChanged [this event]
-      (let [onscreen-component (.getSource event)
-            selected-values (mapv get-view-or-identity (.getSelectedValuesList onscreen-component))]
-        (when (not (.getValueIsAdjusting event))
-          (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values))))))
-
-(defn reify-tree-list-selection-listener [ctx table selection-change-handler]
-  (reify ListSelectionListener
-    (valueChanged [this event]
-      (let [event-source (.getSource event)
-            table-model (.getModel table)
-            selected-indices (seq (.getSelectedIndices event-source))
-            selected-values (mapv (fn get-item [i] (.getItemAt table-model i)) selected-indices)]
-        (when (not (.getValueIsAdjusting event))
-          (selection-change-handler (:app-ref ctx) (get-view table) table selected-values))))))
-
-(defn- log-document-event [msg event]
-  (let [document (.getDocument event)
-        length (.getLength document)]
-    (log/info (str msg ": " (.getText document 0 length)))))
-
-(defn reify-document-listener-to-text-change-listener [text-component text-change-handler]
-  (reify DocumentListener
-    (changedUpdate [this document-event]
-      (if (contains? @silenced-events [(get-comp-id text-component) :text])
-        (do)
-        (do
-          (log/info "DocumentListener.changedUpdate")
-          (text-change-handler document-event))))
-    (insertUpdate [this document-event]
-      #_(try
-        (let [comp-id (get-comp-id text-component)]
-          (log/info "silenced-event?" (contains? @silenced-events [comp-id :text])))
-        (catch Exception e
-          (log/warn e "got exception while checking for silenced-events")))
-      (if (contains? @silenced-events [(get-comp-id text-component) :text])
-        (do)
-        (do
-          (text-change-handler document-event))))
-    (removeUpdate [this document-event]
-      (if (contains? @silenced-events [(get-comp-id text-component) :text])
-        (do)
-        (do
-          (text-change-handler document-event))))))
+(defn- set-accelerator [c ctx key-stroke]
+  (.setAccelerator c key-stroke))
 
 (defn- set-background [c ctx color]
   (set-property-on-root-pane c (create/create-color color) #(.getBackground %) #(.setBackground %1 %2)))
 
 (defn set-foreground [c ctx color]
   (set-property-on-root-pane c (create/create-color color) #(.getForeground %) #(.setForeground %1 %2)))
+
+(defn set-columns [c ctx num-columns]
+  (.setColumns c num-columns))
 
 (defn update-client-properties [c ctx properties]
   (let [{:keys [old-view attr]} ctx
@@ -372,50 +192,53 @@
 (defn- set-tool-tip-text [c ctx tool-tip-text]
   (.setToolTipText c tool-tip-text))
 
+(defn- set-scroll-bar [scroll-bar position]
+  (.setValue scroll-bar position))
+
+(defn- set-vertical-scroll-bar [c ctx position]
+  (let [scroll-bar (.getVerticalScrollBar c)]
+    (set-scroll-bar scroll-bar position)))
+
+(defn- set-horizontal-scroll-bar [c ctx position]
+  (let [scroll-bar (.getHorizontalScrollBar c)]
+    (set-scroll-bar scroll-bar position)))
+
 (defn- set-width [c ctx width]
   (if (nil? width)
-    (log/warn "skipping setting of width for component c because width is null. c =" c)
     (let [height (.getHeight ^Component c)]
       (.setSize c (Dimension. width height)))))
 
-(defn- set-some-width [width getter-fn setter-fn]
+(defn- set-some-width [c width getter-fn setter-fn]
   (let [dimension (getter-fn)
         height (.getHeight dimension)]
-    (setter-fn (Dimension. width height))))
+    (setter-fn (Dimension. width height)))
+  (when (instance? Window c)
+    (.pack c)))
 
-(defn- set-some-height [height getter-fn setter-fn]
+(defn- set-some-height [c height getter-fn setter-fn]
   (let [dimension (getter-fn)
         width (.getWidth dimension)]
-    (setter-fn (Dimension. width height))))
+    (setter-fn (Dimension. width height)))
+  (when (instance? Window c)
+    (.pack c)))
 
 (defn- set-max-width [c ctx max-width]
-  (set-some-width max-width #(.getMaximumSize c) #(.setMaximumSize c %))
-  #_(let [max-size (.getMaximumSize c)
-          max-height (.getHeight max-size)]
-      (log/info "setting maximum size to" max-width "," max-height "for" c)
-      (.setMaximumSize c (Dimension. max-width max-height))))
+  (set-some-width c max-width #(.getMaximumSize c) #(.setMaximumSize c %)))
 
 (defn- set-min-width [c ctx min-width]
-  (set-some-width min-width #(.getMinimumSize c) #(.setMinimumSize c %))
-  #_(let [min-size (.getMinimumSize c)
-          min-height (.getHeight min-size)]
-      (.setMinimumSize c (Dimension. min-width min-height))))
+  (set-some-width c min-width #(.getMinimumSize c) #(.setMinimumSize c %)))
 
 (defn- set-preferred-width [c ctx preferred-width]
-  (set-some-width preferred-width #(.getPreferredSize c) #(.setPreferredSize c %))
-  #_(let [preferred-size (.getPreferredSize c)
-          preferred-height (.getHeight preferred-size)]
-      (log/info "setting preferred size to" preferred-width "," preferred-height "for" c)
-      (.setPreferredSize c (Dimension. preferred-width preferred-height))))
+  (set-some-width c preferred-width #(.getPreferredSize c) #(.setPreferredSize c %)))
 
 (defn- set-max-height [c ctx max-height]
-  (set-some-height max-height #(.getMaximumSize c) #(.setMaximumSize c %)))
+  (set-some-height c max-height #(.getMaximumSize c) #(.setMaximumSize c %)))
 
 (defn- set-min-height [c ctx min-height]
-  (set-some-height min-height #(.getMinimumSize c) #(.setMinimumSize c %)))
+  (set-some-height c min-height #(.getMinimumSize c) #(.setMinimumSize c %)))
 
 (defn- set-preferred-height [c ctx preferred-height]
-  (set-some-height preferred-height #(.getPreferredSize c) #(.setPreferredSize c %)))
+  (set-some-height c preferred-height #(.getPreferredSize c) #(.setPreferredSize c %)))
 
 (defn set-height [c ctx height]
   (let [view-height (get-in ctx [:old-view :height])
@@ -430,7 +253,7 @@
     (.setDefaultCloseOperation c (on-close-action-map action))
     (do
       (.setDefaultCloseOperation c WindowConstants/DO_NOTHING_ON_CLOSE)
-      (.addWindowListener c (proxy-window-listener-close (:app-ref ctx) c action)))))
+      (.addWindowListener c (listeners/proxy-window-listener-close (:app-ref ctx) c action)))))
 
 
 ; :contents fns
@@ -506,7 +329,7 @@
 (defmulti get-child-data (fn [onscreen-component index] (class onscreen-component)))
 (defmethod get-child-data JList [onscreen-component index]
   (let [child (get-child-at onscreen-component index)]
-    (get-client-prop child "data")))
+    (util/get-client-prop child "data")))
 
 
 ; TODO: oops... I just added all the :class key-value pairs, but perhaps unnecessarily. I did that so I could match
@@ -640,28 +463,37 @@
   ; This is a complex update because it's trying to avoid infinite cycles between the EDT and Retroact event loops.
   (let [text-in-field (str (.getText text-component))
         text-state (str text)
-        text-prop (str (get-client-prop text-component "text"))
-        event-id [(get-comp-id text-component) :text]]
+        text-prop (str (util/get-client-prop text-component "text"))
+        event-id [(util/get-comp-id text-component) :text]]
     (cond
-      ;
-      (= text-prop text-state) (do)
+      (= text-prop text-state) (do #_nothing)
       (and (not (= text-prop text-state))
            (= text-prop text-in-field)) (do (swap! silenced-events conj event-id)
                                             (.setText text-component text-state)
-                                            (set-client-prop text-component "text" text-state)
+                                            (util/set-client-prop text-component "text" text-state)
                                             (swap! silenced-events disj event-id))
       (and (not (= text-prop text-state))
-           (not (= text-prop text-in-field))) (do (set-client-prop text-component "text" text-state))
+           (not (= text-prop text-in-field))) (do (util/set-client-prop text-component "text" text-state))
       :else (log/error "set-text: should never reach here!"))))
 
 (defn on-change [c ctx change-handler]
-  (.addChangeListener c (reify-change-listener (fn [ce] (change-handler ctx ce)))))
+  (.addChangeListener c (listeners/reify-change-listener (fn [ce] (change-handler ctx ce)))))
+
+(defn- on-horizontal-scroll [c ctx scroll-handler]
+  (on-change
+    (.getModel (.getHorizontalScrollBar c))
+    ctx scroll-handler))
+
+(defn- on-vertical-scroll [c ctx scroll-handler]
+  (on-change
+    (.getModel (.getVerticalScrollBar c))
+    ctx scroll-handler))
 
 (defn on-component-resize [c ctx component-resize-handler]
-  (.addComponentListener c (reify-component-resize-listener (fn [ce] (component-resize-handler ctx ce)))))
+  (.addComponentListener c (listeners/reify-component-resize-listener (fn [ce] (component-resize-handler ctx ce)))))
 
 (defn on-component-hidden [c ctx handler]
-  (.addComponentListener c (reify-component-hidden-listener (fn [ce] (handler ctx ce)))))
+  (.addComponentListener c (listeners/reify-component-hidden-listener (fn [ce] (handler ctx ce)))))
 
 (defn- on-drag
   "When handler returns a truthy value, the value is treated as the transferable and DragSource.startDrag is called."
@@ -692,29 +524,29 @@
   (.setTransferHandler (get-scrollable-view c) transfer-handler))
 
 (defn on-property-change [c ctx property-change-handler]
-  (.addPropertyChangeListener c (reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
+  (.addPropertyChangeListener c (listeners/reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
 
 (defmulti on-selection-change (fn [c _ _] (class c)))
 
 (defmethod on-selection-change JComboBox [c ctx selection-change-handler]
   (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
-  (.addActionListener c (reify-action-listener
+  (.addActionListener c (listeners/proxy-action-listener
                           (fn [ae]
                             (let [selected-item (.getSelectedItem (.getModel c))]
                               (selection-change-handler (create-handler-context ctx c) ae selected-item))))))
 
 (defmethod on-selection-change JTree [c ctx selection-change-handler]
   (doseq [sl (vec (.getTreeSelectionListeners c))] (.removeTreeSelectionListener c sl))
-  (.addTreeSelectionListener c (reify-tree-selection-listener ctx selection-change-handler)))
+  (.addTreeSelectionListener c (listeners/reify-tree-selection-listener ctx selection-change-handler)))
 
 (defmethod on-selection-change JList [c ctx selection-change-handler]
   (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
-  (.addListSelectionListener c (reify-list-selection-listener ctx selection-change-handler)))
+  (.addListSelectionListener c (listeners/reify-list-selection-listener ctx selection-change-handler)))
 
 (defmethod on-selection-change JTable [table ctx selection-change-handler]
   (let [selection-model (.getSelectionModel table)]
     (doseq [sl (vec (.getListeners table ListSelectionListener))] (.removeListSelectionListener selection-model sl))
-    (.addListSelectionListener selection-model (reify-tree-list-selection-listener ctx table selection-change-handler))))
+    (.addListSelectionListener selection-model (listeners/reify-tree-list-selection-listener ctx table selection-change-handler))))
 
 (defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
   (on-selection-change (get-scrollable-view c) ctx selection-change-handler))
@@ -723,7 +555,7 @@
   #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
       (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
   (.addDocumentListener (.getDocument c)
-                        (reify-document-listener-to-text-change-listener
+                        (listeners/reify-document-listener-to-text-change-listener
                           c
                           (fn text-change-handler-clojure [doc-event]
                             (try
@@ -746,22 +578,34 @@
   [c ctx set-value-at-handler]
   (safe-table-model-set c (memfn setSetValueAtFn set-value-at-fn)
                         (fn set-value-at-fn [old-item new-value row col]
-                          (set-value-at-handler (:app-ref ctx) (get-view c) old-item new-value row col))))
+                          (set-value-at-handler (:app-ref ctx) (util/get-view c) old-item new-value row col))))
 
 (defn- on-focus-gained
   [c ctx focus-gained-handler]
-  (.addFocusListener c (proxy-focus-gained (create-handler-context ctx c) focus-gained-handler)))
+  (.addFocusListener c (listeners/proxy-focus-gained (create-handler-context ctx c) focus-gained-handler)))
 
 (defn- on-focus-lost
   [c ctx focus-lost-handler]
-  (.addFocusListener c (proxy-focus-lost (create-handler-context ctx c) focus-lost-handler)))
+  (.addFocusListener c (listeners/proxy-focus-lost (create-handler-context ctx c) focus-lost-handler)))
 
 (defn on-click
   [c ctx click-handler]
   (if (not (instance? JScrollPane c))
-    (.addMouseListener
-      c (proxy-mouse-listener-click (:app-ref ctx) click-handler))
+    (do
+      (doseq [ml (vec (.getMouseListeners c))]
+        (when (instance? RetroactSwingListener ml)
+          (.removeMouseListener c ml)))
+      (when click-handler
+        (.addMouseListener
+          c (listeners/proxy-mouse-listener-click (:app-ref ctx) click-handler))))
     (on-click (get-scrollable-view c) ctx click-handler)))
+
+(defn on-mouse-wheel-moved
+  [c ctx wheel-moved-handler]
+  (.addMouseWheelListener
+    c (listeners/reify-mouse-listener-wheel-moved
+        (create-handler-context ctx c)
+        wheel-moved-handler)))
 
 
 ; *** :render and :class are reserved attributes, do not use! ***
@@ -769,10 +613,14 @@
 ; an entirely new one. Changes to :render perhaps should do the same, but ideally, should update the underlying
 ; rendering state.
 (def attr-appliers
-  {:background             set-background
+  {:accelerator            set-accelerator                  ; Java KeyStroke instances have identity and value congruence
+   :always-on-top          (fn set-always-on-top [c ctx always-on-top] (.setAlwaysOnTop c always-on-top))
+   :background             set-background
    :border                 borders/set-border               ; maps to border factory methods, see set-border
+   :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
    :client-properties      update-client-properties
    :color                  set-foreground
+   :columns                set-columns
    :constraints            set-constraints
    :content-area-filled    (fn set-content-area-filled [c ctx filled] (.setContentAreaFilled c filled))
    :content-type           (fn set-content-type [c ctx content-type] (.setContentType c content-type))
@@ -783,14 +631,12 @@
    :extensions             {:recreate [FileNameExtensionFilter]}
    :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}
+   :focusable              (fn set-focusable [c ctx focusable] (.setFocusable c focusable))
    :font                   (fn set-font [c ctx font] (.setFont c font))
    :font-size              (fn set-font-size [c ctx size] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int (.getStyle f) ^float size))))
    :font-style             (fn set-font-style [c ctx style] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int style ^float (.getSize f)))))
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
-   :data                   (fn set-retroact-data [c ctx data] (set-client-prop c "data" data))
-   ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.
-   :margin                 (fn set-margin [c ctx insets] (.setMargin c insets))
-   :modal                  (fn set-modal [c ctx modal] (.setModal c modal))
+   :data                   (fn set-retroact-data [c ctx data] (util/set-client-prop c "data" data))
    :height                 set-height
    :layout                 {:set (fn set-layout [c ctx layout] (.setLayout c layout))
                             :get (fn get-layout [c ctx]
@@ -798,7 +644,11 @@
                                      (instance? RootPaneContainer c) (.getLayout (.getContentPane c))
                                      :else (.getLayout c)))}
    :line-wrap              (fn set-line-wrap [c ctx line-wrap] (.setLineWrap c line-wrap))
+   ; The following doesn't appear to work. It may be that macOS overrides margins. Try using empty border.
+   :margin                 (fn set-margin [c ctx insets] (.setMargin c insets))
+   :modal                  (fn set-modal [c ctx modal] (.setModal c modal))
    :name                   (fn set-name [c ctx name] (.setName c name))
+   :on-close               set-on-close
    :opaque                 set-opaque
    :owner                  {:recreate [JDialog]}
    :row-selection-interval set-row-selection-interval
@@ -810,10 +660,10 @@
    :text                   set-text
    :title                  set-title
    :tool-tip-text          set-tool-tip-text
-   :viewport-border        borders/set-viewport-border
-   :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
-                            :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    :visible                (fn set-visible [c ctx visible] (.setVisible c (boolean visible)))
+   :wrap-style-word        (fn set-wrap-style-word [c ctx wrap-style-word] (.setWrapStyleWord c wrap-style-word))
+
+   ; size related attr
    :width                  set-width
    :max-width              set-max-width
    :min-width              set-min-width
@@ -821,8 +671,8 @@
    :max-height             set-max-height
    :min-height             set-min-height
    :preferred-height       set-preferred-height
-   :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
-   :on-close               set-on-close
+
+   ; miglayout constraint attr
    :layout-constraints     (fn set-layout-constraints [c ctx constraints] (.setLayoutConstraints c constraints))
    :row-constraints        (fn set-row-constraints [c ctx constraints] (.setRowConstraints c constraints))
    :column-constraints     (fn set-column-constraints [c ctx constraints]
@@ -875,14 +725,25 @@
    :tree-scroll-path-fn    set-tree-scroll-path-fn
    :tree-data              set-tree-data
    :toggle-click-count     set-tree-toggle-click-count
+   ; End tree attr appliers
+   ; Scroll pane appliers
+   :horizontal-scroll-bar  set-horizontal-scroll-bar
+   :on-vertical-scroll     on-vertical-scroll
+   :on-horizontal-scroll   on-horizontal-scroll
+   :vertical-scroll-bar    set-vertical-scroll-bar
+   :viewport-border        borders/set-viewport-border
+   :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
+                            :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
+   ; End scroll pane appliers
 
    ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
    :on-action              (fn on-action [c ctx action-handler]
-                             #_(if (instance? JCheckBox c) (action-handler (:app-ref ctx) nil))
                              (doseq [al (vec (.getActionListeners c))]
-                               (.removeActionListener c al))
-                             (.addActionListener c (reify-action-listener (fn action-handler-clojure [action-event]
-                                                                            (action-handler (:app-ref ctx) action-event)))))
+                               (when (instance? RetroactSwingListener al)
+                                 (.removeActionListener c al)))
+                             (when action-handler
+                               (.addActionListener c (listeners/proxy-action-listener (fn action-handler-clojure [action-event]
+                                                                                        (action-handler (:app-ref ctx) action-event))))))
    :on-change              on-change
    :on-component-resize    on-component-resize
    :on-component-hidden    on-component-hidden
@@ -894,6 +755,7 @@
    :on-focus-lost          on-focus-lost
    ; Mouse listeners
    :on-click               on-click
+   :on-mouse-wheel-moved   on-mouse-wheel-moved
    ; Drag and Drop
    ; :on-drag, :on-drag-over, and :on-drop may be used together to implement drag and drop, however, another way exists.
    ; See :drag-enabled
@@ -929,10 +791,10 @@
 
 (def toolkit-config
   {:attr-appliers             `attr-appliers
-   :assoc-view                `assoc-view
-   :get-view                  `get-view
-   :assoc-ctx                 `assoc-ctx
-   :get-ctx                   `get-ctx
+   :assoc-view                `util/assoc-view
+   :get-view                  `util/get-view
+   :assoc-ctx                 `util/assoc-ctx
+   :get-ctx                   `util/get-ctx
    :redraw-onscreen-component `redraw-onscreen-component
    :class-map                 `class-map
    :run-on-toolkit-thread     `run-on-toolkit-thread})

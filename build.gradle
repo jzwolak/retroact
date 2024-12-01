@@ -37,12 +37,14 @@ dependencies {
 clojure {
     builds {
         main {
+            // order matters, do not reorder
             aotNamespaces.add("retroact.swing.compiled.jtable")
             aotNamespaces.add("retroact.swing.compiled.jtree")
             aotNamespaces.add("retroact.swing.compiled.retroact-invocation-event")
             aotNamespaces.add("retroact.swing.compiled.retroact-event-queue")
             aotNamespaces.add("retroact.swing.compiled.transferable")
             aotNamespaces.add("retroact.swing.compiled.identity-wrapper")
+            aotNamespaces.add("retroact.swing.compiled.listeners")
         }
     }
 }

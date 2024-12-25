@@ -2,24 +2,27 @@
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jzwolak/retroact/blob/main/LICENSE)
 [![Clojars Project](https://img.shields.io/clojars/v/com.insilicalabs/retroact.svg)](https://clojars.org/com.insilicalabs/retroact)
 
-An experiment in creating a React like library in Clojure for Clojure, Java, and Swing.
+A React like library in Clojure for Clojure, Java, and Swing. Retroact is extensible to support other GUI toolkits,
+like JavaFX, SWT, and AWT.
 
-The goal is to make something that can be used in Java and with legacy applications and have it be completely
-Functional Reactive Programming (FRP). The user interface code is declarative, it is a function of the app state, and
-the code that initializes and updates the UI is one.
+Retroact can be used in legacy Java applications and have all the new code be completely Functional Reactive
+Programming (FRP). The user interface code is declarative, it is created by a function of the app state, and the code
+to initialize the user interface and update the user interface are one.
 
-This is a pure Clojure implementation and no Java bindings. There may be a future version with a Java API.
+This is a pure Clojure implementation and no Java bindings.
 
-Though this is an experimental project, it is being used in a production rich internet client application for biological
-modeling and simulation. Its status will likely be upgraded, as it has matured significantly since the above text was
-written.
+Retroact was originally written for a biological modeling app I work on (ProcessDB). I wanted the app to move forward
+to modern coding techniques and patterns but it was all legacy Java Swing code. ProcessDB is a production application
+in use and the latest version is powered primarily by Retroact. That said, Retroact does not cover all of Swing and
+I imagine new users will quickly encounter components and properties in Swing they would like to use but are not
+supported by Retroact. Please consider contributing!
 
 ## Unique Contribution
 
 Retroact has a couple unique contributions to the software developer community.
 
 1. Retroact is not tied to Swing and was designed from the start to have a modular connection to the underlying toolkit.
-   Therefore, it is easy to add support for other toolkits such as JavaFX, SWT, AWT, etc..
+   Therefore, it is possible to add support for other toolkits such as JavaFX, SWT, AWT, etc..
 2. Retroact plays nice with existing legacy application code. The whole point of this project was to allow me to move
    my work forward into modern programming practices without requiring my clients to pay for a complete rewrite of
    their existing applications. Hence it is named "Retro"-act.
@@ -55,7 +58,7 @@ Here's how to create your own basic app.
 
 Alternatively, see [Run](#run) on how to run an example included with Retroact.
 
-The following is a basic "Hello World" app that displays a Swing JFrame with the message "Hello World!".
+The following is a basic stateless "Hello World" app that displays a Swing JFrame with the message "Hello World!".
 
 ```clojure
 (defn hello-world-app
@@ -456,6 +459,13 @@ reload any namespaces that have changed if you're editing/writing code (:reload-
 facilitate this).
 
 
+# Glossary
+
+* toolkit modular interface - sometimes "toolkit interface" or "modular interface". This is the code that defines maps
+  and fns for a particular toolkit (Swing, AWT, JavaFX, SWT, etc.). Retroact uses the modular interface to update
+  onscreen components from the declarative view and manage life cycles of those components.
+
+
 # Known Issues
 
 ## Drag and Drop
@@ -467,8 +477,9 @@ mostly works well, but it doesn't work for all things. In the case of drag and d
 state may update between the time the user starts the drag and the time data is retrieved from the app state. This is
 decidedly different from the problem of the user _about_ to click on something and having it move or disappear. In this
 case the user has already clicked, appears to have grabbed the thing and starts dragging it, but in fact, another thing
-has been grabbed or nothing has been grabbed. This may be ok if the thing being dragged is displayed in a
-distinguishable form (like a file name or image icon) so the user knows they did not get the thing they intended to get.
+has been grabbed or nothing has been grabbed. This may be ok if the thing being dragged is displayed (under the user's
+cursor) in a distinguishable form (like a file name or image icon) so the user knows they did or did not get the thing
+they intended to get.
 
 Perhaps applications need to lock the drag source view when something is running that may update the view. Rather,
 disable dragging from that view and indicate it is not available for dragging.

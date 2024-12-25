@@ -178,12 +178,13 @@ and, as far as Retroact is concerned, the Retroact component is a _value_, thoug
 
 ## Handler Fns
 
-Handler fns are better specified as named fns rather than anonymous fns.
+Handler fns are better specified as named fns rather than anonymous fns so that they have reference equality.
 
+Good:
 ```clojure
 :on-action handler
 ```
-is better than
+Bad:
 ```clojure
 :on-action (fn [app-ref action-event] ...)
 ```
@@ -192,7 +193,8 @@ This is because the render fn is called every time something changes. An anonymo
 and id each time and therefore Retroact will see it as a different fn. Retroact will then remove the old handler and add
 the new one even if the actual code inside is identical.
 
-In some cases the attribute may not properly remove the previous fn, though this would be considered a bug.
+In some cases the attribute may not properly remove the previous fn, though this would be considered a bug. Retroact is
+still under development and removing all the handler fns properly is still in the works.
 
 ## Extending
 

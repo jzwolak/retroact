@@ -18,7 +18,7 @@
   (:import (clojure.lang ArityException Atom)
            (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit Window)
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
-           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter MouseAdapter MouseWheelListener WindowAdapter)
+           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter FocusListener KeyListener MouseAdapter MouseListener MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (java.util WeakHashMap)
            (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
@@ -27,7 +27,7 @@
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)
-           (retroact.swing.compiled.listeners RetroactSwingListener)
+           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -203,10 +203,20 @@
   (let [scroll-bar (.getHorizontalScrollBar c)]
     (set-scroll-bar scroll-bar position)))
 
+(defn- get-default-size [c]
+  (let [preferred-size (.getPreferredSize c)
+        _ (.setPreferredSize c nil)
+        default-size (.getPreferredSize c)]
+    (.setPreferredSize c preferred-size)
+    default-size))
+
 (defn- set-width [c ctx width]
-  (if (nil? width)
-    (let [height (.getHeight ^Component c)]
-      (.setSize c (Dimension. width height)))))
+  (let [view-width (get-in ctx [:old-view :width])
+        onscreen-width (.getWidth c)
+        height (-> c .getSize .getHeight)]
+    (when (and (not= view-width onscreen-width) (not= onscreen-width width))
+      (log/warn "onscreen width changed outside Retroact since last update. view-width =" view-width ", onscreen-width =" onscreen-width ", new-width =" width))
+    (.setSize c (Dimension. (or width (.getWidth (get-default-size c))) height))))
 
 (defn- set-some-width [c width getter-fn setter-fn]
   (let [dimension (getter-fn)
@@ -246,7 +256,7 @@
         width (-> c .getSize .getWidth)]
     (when (and (not= view-height onscreen-height) (not= onscreen-height height))
       (log/warn "onscreen height changed outside Retroact since last update. view-height =" view-height ", onscreen-height =" onscreen-height ", new-height =" height))
-    (.setSize c (Dimension. width height))))
+    (.setSize c (Dimension. width (or height (.getHeight (get-default-size c)))))))
 
 (defn set-on-close [c ctx action]
   (if (contains? on-close-action-map action)
@@ -477,7 +487,9 @@
       :else (log/error "set-text: should never reach here!"))))
 
 (defn on-change [c ctx change-handler]
-  (.addChangeListener c (listeners/reify-change-listener (fn [ce] (change-handler ctx ce)))))
+  (listeners/remove-listener c ChangeListener RetroactSwingOnChange)
+  (when change-handler
+    (.addChangeListener c (listeners/proxy-change-listener (fn [ce] (change-handler ctx ce))))))
 
 (defn- on-horizontal-scroll [c ctx scroll-handler]
   (on-change
@@ -490,10 +502,20 @@
     ctx scroll-handler))
 
 (defn on-component-resize [c ctx component-resize-handler]
-  (.addComponentListener c (listeners/reify-component-resize-listener (fn [ce] (component-resize-handler ctx ce)))))
+  (listeners/remove-listener c ComponentListener RetroactSwingOnComponentResize)
+  (when component-resize-handler
+    (.addComponentListener c (listeners/proxy-component-resize-listener (fn [ce] (component-resize-handler ctx ce))))))
 
 (defn on-component-hidden [c ctx handler]
-  (.addComponentListener c (listeners/reify-component-hidden-listener (fn [ce] (handler ctx ce)))))
+  (listeners/remove-listener c ComponentListener RetroactSwingOnComponentHidden)
+  (when handler
+    (.addComponentListener c (listeners/proxy-component-hidden-listener (fn [ce] (handler ctx ce))))))
+
+(defn on-key-pressed [c ctx handler]
+  (listeners/remove-listener c KeyListener RetroactSwingOnKeyPressed)
+  (when handler
+    ; TODO: passing the context here (ctx) is incorrect and I do it all over the place. The problem is that the context does not change because it has been captured in a closure.
+    (.addKeyListener c (listeners/proxy-key-pressed-listener (fn [e] (handler ctx e))))))
 
 (defn- on-drag
   "When handler returns a truthy value, the value is treated as the transferable and DragSource.startDrag is called."
@@ -524,57 +546,70 @@
   (.setTransferHandler (get-scrollable-view c) transfer-handler))
 
 (defn on-property-change [c ctx property-change-handler]
-  (.addPropertyChangeListener c (listeners/reify-property-change-listener (fn [pce] (property-change-handler ctx pce)))))
+  (listeners/remove-listener c PropertyChangeListener RetroactSwingOnPropertyChange)
+  (when property-change-handler
+    (.addPropertyChangeListener c (listeners/proxy-property-change-listener (fn [pce] (property-change-handler ctx pce))))))
 
 (defmulti on-selection-change (fn [c _ _] (class c)))
 
 (defmethod on-selection-change JComboBox [c ctx selection-change-handler]
-  (doseq [al (vec (.getActionListeners c))] (.removeActionListener c al))
-  (.addActionListener c (listeners/proxy-action-listener
-                          (fn [ae]
-                            (let [selected-item (.getSelectedItem (.getModel c))]
-                              (selection-change-handler (create-handler-context ctx c) ae selected-item))))))
+  (listeners/remove-listener c ActionListener RetroactSwingOnSelectionChange)
+  (when selection-change-handler
+    (.addActionListener c (listeners/proxy-combo-box-selection-listener
+                            ctx
+                            (fn [ae]
+                              (let [selected-item (.getSelectedItem (.getModel c))]
+                                (selection-change-handler (create-handler-context ctx c) ae selected-item)))))))
 
 (defmethod on-selection-change JTree [c ctx selection-change-handler]
-  (doseq [sl (vec (.getTreeSelectionListeners c))] (.removeTreeSelectionListener c sl))
-  (.addTreeSelectionListener c (listeners/reify-tree-selection-listener ctx selection-change-handler)))
+  (listeners/remove-listener c TreeSelectionListener RetroactSwingOnSelectionChange)
+  (when selection-change-handler
+    (.addTreeSelectionListener c (listeners/proxy-tree-selection-listener ctx selection-change-handler))))
 
 (defmethod on-selection-change JList [c ctx selection-change-handler]
-  (doseq [sl (vec (.getListSelectionListeners c))] (.removeListSelectionListener c sl))
-  (.addListSelectionListener c (listeners/reify-list-selection-listener ctx selection-change-handler)))
+  (listeners/remove-listener c ListSelectionListener RetroactSwingOnSelectionChange)
+  (when selection-change-handler
+    (.addListSelectionListener c (listeners/proxy-list-selection-listener ctx selection-change-handler))))
 
 (defmethod on-selection-change JTable [table ctx selection-change-handler]
   (let [selection-model (.getSelectionModel table)]
-    (doseq [sl (vec (.getListeners table ListSelectionListener))] (.removeListSelectionListener selection-model sl))
-    (.addListSelectionListener selection-model (listeners/reify-tree-list-selection-listener ctx table selection-change-handler))))
+    (listeners/remove-listener selection-model ListSelectionListener RetroactSwingOnSelectionChange)
+    (when selection-change-handler
+      (.addListSelectionListener selection-model (listeners/proxy-tree-list-selection-listener ctx table selection-change-handler)))))
 
 (defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
   (on-selection-change (get-scrollable-view c) ctx selection-change-handler))
 
 (defn on-text-change [c ctx text-change-handler]
+  (listeners/remove-listener (.getDocument c) DocumentListener RetroactSwingOnTextChange)
   #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
       (when (instance? DocumentListener dl) (.removeDocumentListener (.getDocument c) dl)))
-  (.addDocumentListener (.getDocument c)
-                        (listeners/reify-document-listener-to-text-change-listener
-                          c
-                          (fn text-change-handler-clojure [doc-event]
-                            (try
-                              (text-change-handler (create-handler-context ctx c) doc-event (.getText c))
-                              (catch ArityException ae1
-                                (log/warn "two and four arg version of :on-text-change handler deprecated, please update to"
-                                          "three args with the context, doc-event, and new text as the args")
-                                (try
-                                  (text-change-handler (:app-ref ctx) c doc-event (.getText c))
-                                  (catch ArityException ae
-                                    (text-change-handler (:app-ref ctx) (.getText c))))))))))
+  (when text-change-handler
+    (.addDocumentListener
+      (.getDocument c)
+      (listeners/proxy-document-listener-to-text-change-listener
+        c
+        (fn text-change-handler-clojure [doc-event]
+          (try
+            (text-change-handler (create-handler-context ctx c) doc-event (.getText c))
+            (catch ArityException ae1
+              (log/warn "two and four arg version of :on-text-change handler deprecated, please update to"
+                        "three args with the context, doc-event, and new text as the args")
+              (try
+                (text-change-handler (:app-ref ctx) c doc-event (.getText c))
+                (catch ArityException ae
+                  (text-change-handler (:app-ref ctx) (.getText c)))))))))))
 
 (defn on-set-value-at
   "The set-value-at-handler has args [app-ref old-item new-value row col] where row and col are the row and column of
-   the table where the user performed an edit on a the cell at row and column, old-item is the item represented at that
+   the table where the user performed an edit on the cell at row and column, old-item is the item represented at that
    row (this is in domain space and may be a map, vec, set, or any arbitrary data structure - maps are typical), and
    new-value is the value of the cell after the user completed the edit. The set-value-at-handler must determine where
    in the item data structure the new-value must be set and how to perform that set in app-ref. This is, in a sense the
-   inverse of the row-fn in set-row-fn. See examples.todo for an example handler."
+   inverse of the row-fn in set-row-fn. See examples.todo for an example handler.
+
+   NOTE: I cannot remember why I created this. I believe it is to handle edits of the cells and pass the updated value
+   back to the app for updating the app state. TODO: Verify this and document it."
   [c ctx set-value-at-handler]
   (safe-table-model-set c (memfn setSetValueAtFn set-value-at-fn)
                         (fn set-value-at-fn [old-item new-value row col]
@@ -582,19 +617,21 @@
 
 (defn- on-focus-gained
   [c ctx focus-gained-handler]
-  (.addFocusListener c (listeners/proxy-focus-gained (create-handler-context ctx c) focus-gained-handler)))
+  (listeners/remove-listener c FocusListener RetroactSwingOnFocusGained)
+  (when focus-gained-handler
+    (.addFocusListener c (listeners/proxy-focus-gained (create-handler-context ctx c) focus-gained-handler))))
 
 (defn- on-focus-lost
   [c ctx focus-lost-handler]
-  (.addFocusListener c (listeners/proxy-focus-lost (create-handler-context ctx c) focus-lost-handler)))
+  (listeners/remove-listener c FocusListener RetroactSwingOnFocusLost)
+  (when focus-lost-handler
+    (.addFocusListener c (listeners/proxy-focus-lost (create-handler-context ctx c) focus-lost-handler))))
 
 (defn on-click
   [c ctx click-handler]
   (if (not (instance? JScrollPane c))
     (do
-      (doseq [ml (vec (.getMouseListeners c))]
-        (when (instance? RetroactSwingListener ml)
-          (.removeMouseListener c ml)))
+      (listeners/remove-listener c MouseListener RetroactSwingOnClick)
       (when click-handler
         (.addMouseListener
           c (listeners/proxy-mouse-listener-click (:app-ref ctx) click-handler))))
@@ -602,10 +639,12 @@
 
 (defn on-mouse-wheel-moved
   [c ctx wheel-moved-handler]
-  (.addMouseWheelListener
-    c (listeners/reify-mouse-listener-wheel-moved
-        (create-handler-context ctx c)
-        wheel-moved-handler)))
+  (listeners/remove-listener c MouseWheelListener RetroactSwingOnMouseWheelMoved)
+  (when wheel-moved-handler
+    (.addMouseWheelListener
+      c (listeners/proxy-mouse-listener-wheel-moved
+          (create-handler-context ctx c)
+          wheel-moved-handler))))
 
 
 ; *** :render and :class are reserved attributes, do not use! ***
@@ -637,7 +676,6 @@
    :font-style             (fn set-font-style [c ctx style] (let [f (.getFont c)] (.setFont c (.deriveFont ^Font f ^int style ^float (.getSize f)))))
    :icon                   (fn set-icon [c ctx icon] (.setIcon c icon))
    :data                   (fn set-retroact-data [c ctx data] (util/set-client-prop c "data" data))
-   :height                 set-height
    :layout                 {:set (fn set-layout [c ctx layout] (.setLayout c layout))
                             :get (fn get-layout [c ctx]
                                    (cond
@@ -668,6 +706,7 @@
    :max-width              set-max-width
    :min-width              set-min-width
    :preferred-width        set-preferred-width
+   :height                 set-height
    :max-height             set-max-height
    :min-height             set-min-height
    :preferred-height       set-preferred-height
@@ -736,23 +775,23 @@
                             :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    ; End scroll pane appliers
 
-   ; All action listeners must be removed before adding the new one to avoid re-adding the same anonymous fn.
+   ; Event attrs. :on-*
    :on-action              (fn on-action [c ctx action-handler]
-                             (doseq [al (vec (.getActionListeners c))]
-                               (when (instance? RetroactSwingListener al)
-                                 (.removeActionListener c al)))
+                             (listeners/remove-listener c ActionListener RetroactSwingOnAction)
                              (when action-handler
-                               (.addActionListener c (listeners/proxy-action-listener (fn action-handler-clojure [action-event]
-                                                                                        (action-handler (:app-ref ctx) action-event))))))
+                               (.addActionListener c (listeners/proxy-action-listener
+                                                       (fn action-handler-clojure [action-event]
+                                                         (action-handler (:app-ref ctx) action-event))))))
    :on-change              on-change
    :on-component-resize    on-component-resize
    :on-component-hidden    on-component-hidden
+   :on-focus-gained        on-focus-gained
+   :on-focus-lost          on-focus-lost
+   :on-key-pressed         on-key-pressed
    :on-property-change     on-property-change
    :on-selection-change    on-selection-change
    :on-text-change         on-text-change
    :on-set-value-at        on-set-value-at
-   :on-focus-gained        on-focus-gained
-   :on-focus-lost          on-focus-lost
    ; Mouse listeners
    :on-click               on-click
    :on-mouse-wheel-moved   on-mouse-wheel-moved

@@ -1,90 +1,100 @@
 (ns retroact.swing.listeners
   (:require [clojure.tools.logging :as log]
             [retroact.swing.util :refer [silenced-events get-view get-comp-id]])
-  (:import (java.awt.event ActionListener ComponentAdapter FocusAdapter MouseAdapter MouseWheelListener WindowAdapter)
+  (:import (java.awt.event ActionListener ComponentAdapter FocusAdapter KeyAdapter MouseAdapter MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
-           (retroact.swing.compiled.listeners RetroactSwingListener)))
+           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnClose RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
 
+; Not finished...
+(defmacro remove-listener
+  "Removes Retroact managed listeners from component matching the class on-name (e.g., RetroactSwingOnClick) using
+   methods derived from listener-name. For example, if listener-name has the value MouseListener and on-name has the
+   value RetroactSwingOnClick, then getMouseListeners and removeMouseListener will be used for all listeners that are
+   instances of RetroactSwingOnClick."
+  [component listener-name on-name]
+  (let [get-listeners (symbol (str "get" listener-name "s"))
+        remove-listener (symbol (str "remove" listener-name))]
+    `(doseq [~'listener (vec (. ~component ~get-listeners))]
+         (when (instance? ~on-name ~'listener)
+           (. ~component ~remove-listener ~'listener)))))
+
+
 (defn proxy-action-listener
   [action-handler]
-  (proxy [ActionListener RetroactSwingListener] []
+  (proxy [ActionListener RetroactSwingOnAction] []
     (actionPerformed [action-event]
       (action-handler action-event))))
 
-(defn reify-change-listener
+(defn proxy-change-listener
   [change-handler]
-  (reify ChangeListener
-    (stateChanged [this change-event]
+  (proxy [ChangeListener RetroactSwingOnChange] []
+    (stateChanged [change-event]
       (change-handler change-event))))
 
-(defn reify-component-resize-listener
+(defn proxy-component-resize-listener
   [component-resize-handler]
-  (proxy [ComponentAdapter] []
+  (proxy [ComponentAdapter RetroactSwingOnComponentResize] []
     (componentResized [component-event]
       (component-resize-handler component-event))))
 
-(defn reify-component-hidden-listener
+(defn proxy-component-hidden-listener
   [handler]
-  (proxy [ComponentAdapter] []
+  (proxy [ComponentAdapter RetroactSwingOnComponentHidden] []
     (componentHidden [component-event]
       (handler component-event))))
 
-(defn reify-property-change-listener
-  [property-change-handler]
-  (reify PropertyChangeListener
-    (propertyChange [this property-change-event]
-      (property-change-handler property-change-event))))
-
-(defn proxy-window-listener-close [app-ref onscreen-component handler]
-  (proxy [WindowAdapter] []
-    (windowClosing [window-event]
-      (handler app-ref onscreen-component window-event))))
-
-(defn proxy-mouse-listener-click [app-ref click-handler]
-  (proxy [MouseAdapter RetroactSwingListener] []
-    (mousePressed [mouse-event]
-      (click-handler app-ref mouse-event))
-    (mouseClicked [mouse-event]
-      (click-handler app-ref mouse-event))))
-
-(defn reify-mouse-listener-wheel-moved [ctx wheel-moved-handler]
-  (reify MouseWheelListener
-    (mouseWheelMoved [this mouse-wheel-event]
-      (wheel-moved-handler ctx mouse-wheel-event))))
+(defn proxy-key-pressed-listener
+  [handler]
+  (proxy [KeyAdapter RetroactSwingOnKeyPressed] []
+    (keyPressed [key-event]
+      (handler key-event))))
 
 (defn proxy-focus-gained [ctx focus-gained-handler]
-  (proxy [FocusAdapter] []
+  (proxy [FocusAdapter RetroactSwingOnFocusGained] []
     (focusGained [focus-event]
       (focus-gained-handler ctx focus-event))))
 
 (defn proxy-focus-lost [ctx focus-lost-handler]
-  (proxy [FocusAdapter] []
+  (proxy [FocusAdapter RetroactSwingOnFocusLost] []
     (focusLost [focus-event]
       (focus-lost-handler ctx focus-event))))
 
-(defn reify-tree-selection-listener [ctx selection-change-handler]
-  (reify TreeSelectionListener
-    (valueChanged [this event]
+(defn proxy-property-change-listener
+  [property-change-handler]
+  (proxy [PropertyChangeListener RetroactSwingOnPropertyChange] []
+    (propertyChange [property-change-event]
+      (property-change-handler property-change-event))))
+
+; There are different selection listeners for different component types. Here they are.
+
+(defn proxy-combo-box-selection-listener [ctx selection-change-handler]
+  (proxy [ActionListener RetroactSwingOnSelectionChange] []
+    (actionPerformed [action-event]
+      (selection-change-handler action-event))))
+
+(defn proxy-tree-selection-listener [ctx selection-change-handler]
+  (proxy [TreeSelectionListener RetroactSwingOnSelectionChange] []
+    (valueChanged [event]
       (let [onscreen-component (.getSource event)
             ; TODO: I should also pass in the event to the selection-change-handler because selected values don't
             ; indicate the path and the same value may be at multiple leafs.
             selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
         (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
 
-(defn reify-list-selection-listener [ctx selection-change-handler]
-  (reify ListSelectionListener
-    (valueChanged [this event]
+(defn proxy-list-selection-listener [ctx selection-change-handler]
+  (proxy [ListSelectionListener RetroactSwingOnSelectionChange] []
+    (valueChanged [event]
       (let [onscreen-component (.getSource event)
             selected-values (mapv get-view-or-identity (.getSelectedValuesList onscreen-component))]
         (when (not (.getValueIsAdjusting event))
           (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values))))))
 
-(defn reify-tree-list-selection-listener [ctx table selection-change-handler]
-  (reify ListSelectionListener
-    (valueChanged [this event]
+(defn proxy-tree-list-selection-listener [ctx table selection-change-handler]
+  (proxy [ListSelectionListener] []
+    (valueChanged [event]
       (let [event-source (.getSource event)
             table-model (.getModel table)
             selected-indices (seq (.getSelectedIndices event-source))
@@ -92,21 +102,43 @@
         (when (not (.getValueIsAdjusting event))
           (selection-change-handler (:app-ref ctx) (get-view table) table selected-values))))))
 
-(defn reify-document-listener-to-text-change-listener [text-component text-change-handler]
-  (reify DocumentListener
-    (changedUpdate [this document-event]
+; end selection change listeners
+
+(defn proxy-document-listener-to-text-change-listener [text-component text-change-handler]
+  (proxy [DocumentListener RetroactSwingOnTextChange] []
+    (changedUpdate [document-event]
       (if (contains? @silenced-events [(get-comp-id text-component) :text])
         (do)
         (do
           (log/info "DocumentListener.changedUpdate")
           (text-change-handler document-event))))
-    (insertUpdate [this document-event]
+    (insertUpdate [document-event]
       (if (contains? @silenced-events [(get-comp-id text-component) :text])
         (do)
         (do
           (text-change-handler document-event))))
-    (removeUpdate [this document-event]
+    (removeUpdate [document-event]
       (if (contains? @silenced-events [(get-comp-id text-component) :text])
         (do)
         (do
           (text-change-handler document-event))))))
+
+(defn proxy-mouse-listener-click [app-ref click-handler]
+  (proxy [MouseAdapter RetroactSwingOnClick] []
+    (mousePressed [mouse-event]
+      (click-handler app-ref mouse-event))
+    (mouseClicked [mouse-event]
+      (click-handler app-ref mouse-event))))
+
+(defn proxy-mouse-listener-wheel-moved [ctx wheel-moved-handler]
+  (proxy [MouseWheelListener RetroactSwingOnMouseWheelMoved] []
+    (mouseWheelMoved [mouse-wheel-event]
+      (wheel-moved-handler ctx mouse-wheel-event))))
+
+; attr appliers not in the listener :on-* action section
+
+(defn proxy-window-listener-close [app-ref onscreen-component handler]
+  (proxy [WindowAdapter RetroactSwingOnClose] []
+    (windowClosing [window-event]
+      (handler app-ref onscreen-component window-event))))
+

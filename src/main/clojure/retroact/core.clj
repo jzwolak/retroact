@@ -1,16 +1,13 @@
 (ns retroact.core
-  (:require [clojure.core.async :as async :refer [>! >!! <!! alts!! buffer chan go sliding-buffer]]
+  (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
-            [clojure.data :refer [diff]]
             [retroact.algorithms.core :as ra]
             [retroact.error-handling :refer [handle-uncaught-exception]]
             [retroact.swing :as swing]
             [retroact.toolkit :as tk])
   (:import (clojure.lang Agent Atom Ref)
-           (java.awt EventQueue)
-           (java.lang.ref WeakReference)
-           (javax.swing JDialog)))
+           (java.lang.ref WeakReference)))
 
 ; TODO: add ability to register exception handler. Wrap all calls to component-did-mount and component-did-update with
 ; try-catch and call registered exception handlers. Wrap outer loop of retroact main loop in try catch to add a fail

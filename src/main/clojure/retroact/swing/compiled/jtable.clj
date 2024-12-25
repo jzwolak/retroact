@@ -113,8 +113,12 @@
 
 (defn rtable-model-setRowEditableFn [this row-editable-fn]
   (let [state-atom (.state this)]
-    (swap! state-atom assoc :row-editable-fn row-editable-fn)))
+    (if row-editable-fn
+      (swap! state-atom assoc :row-editable-fn row-editable-fn)
+      (swap! state-atom dissoc :row-editable-fn))))
 
 (defn rtable-model-setSetValueAtFn [this set-value-at-fn]
   (let [state-atom (.state this)]
-    (swap! state-atom assoc :set-value-at-fn set-value-at-fn)))
+    (if set-value-at-fn
+      (swap! state-atom assoc :set-value-at-fn set-value-at-fn)
+      (swap! state-atom dissoc :set-value-at-fn))))

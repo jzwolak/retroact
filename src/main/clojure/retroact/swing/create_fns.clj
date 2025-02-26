@@ -23,6 +23,12 @@
     (map? font) (Font. ^Map font)
     :else (Font. font)))
 
+(defn create-box-layout [{:keys [view]}]
+  ; Retroact doesn't support BoxLayout because BoxLayout needs the parent in its constructor. Retroact doesn't support
+  ; this as of this writing.
+  (throw (Exception. "Cannot instantiate BoxLayout because Retroact doesn't support it currently since it needs its parent in its constructor."))
+  #_(BoxLayout. ))
+
 (defn create-jdialog [{:keys [view]}]
   (JDialog. (:owner view)))
 

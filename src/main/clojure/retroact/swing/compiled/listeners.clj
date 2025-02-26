@@ -8,6 +8,7 @@
 (definterface RetroactSwingOnChange)
 (definterface RetroactSwingOnComponentResize)
 (definterface RetroactSwingOnComponentHidden)
+(definterface RetroactSwingOnComponentShown)
 (definterface RetroactSwingOnKeyPressed)
 (definterface RetroactSwingOnPropertyChange)
 (definterface RetroactSwingOnSelectionChange)

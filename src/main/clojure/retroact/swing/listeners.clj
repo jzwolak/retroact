@@ -4,7 +4,7 @@
   (:import (java.awt.event ActionListener ComponentAdapter FocusAdapter KeyAdapter MouseAdapter MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
-           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnClose RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)))
+           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnClose RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
 
@@ -44,6 +44,12 @@
   [handler]
   (proxy [ComponentAdapter RetroactSwingOnComponentHidden] []
     (componentHidden [component-event]
+      (handler component-event))))
+
+(defn proxy-component-shown-listener
+  [handler]
+  (proxy [ComponentAdapter RetroactSwingOnComponentShown] []
+    (componentShown [component-event]
       (handler component-event))))
 
 (defn proxy-key-pressed-listener

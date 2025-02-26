@@ -21,13 +21,13 @@
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter FocusListener KeyListener MouseAdapter MouseListener MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (java.util WeakHashMap)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingUtilities TransferHandler WindowConstants)
+           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities TransferHandler WindowConstants)
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (net.miginfocom.swing MigLayout)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)
-           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
+           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -139,9 +139,13 @@
    :exit JFrame/EXIT_ON_CLOSE
    :hide JFrame/HIDE_ON_CLOSE})
 
-(def orientation-map
+(def pane-orientation-map
   {:vertical JSplitPane/VERTICAL_SPLIT
    :horizontal JSplitPane/HORIZONTAL_SPLIT})
+
+(def orientation-map
+  {:vertical   SwingConstants/VERTICAL
+   :horizontal SwingConstants/HORIZONTAL})
 
 (defn- set-accelerator [c ctx key-stroke]
   (.setAccelerator c key-stroke))
@@ -352,6 +356,7 @@
                                  (log/warn "using default constructor to generate a JPanel. :class =" (get-in ctx [:view :class]))
                                  (JPanel.))
    :border-layout              BorderLayout
+   :box-layout                 create/create-box-layout
    :button                     JButton
    :card-layout                CardLayout
    :check-box                  JCheckBox
@@ -401,6 +406,11 @@
   (let [model (.getModel c)]
     (.removeAllElements model)
     (.addAll model data)))
+
+(defn- set-orientation [c ctx orientation]
+  (if (instance? JSplitPane c)
+    (.setOrientation c (pane-orientation-map orientation))
+    (.setOrientation c (orientation-map orientation))))
 
 (defn- set-on-tab
   [c set-fn]
@@ -510,6 +520,11 @@
   (listeners/remove-listener c ComponentListener RetroactSwingOnComponentHidden)
   (when handler
     (.addComponentListener c (listeners/proxy-component-hidden-listener (fn [ce] (handler ctx ce))))))
+
+(defn on-component-shown [c ctx handler]
+  (listeners/remove-listener c ComponentListener RetroactSwingOnComponentShown)
+  (when handler
+    (.addComponentListener c (listeners/proxy-component-shown-listener (fn [ce] (handler ctx ce))))))
 
 (defn on-key-pressed [c ctx handler]
   (listeners/remove-listener c KeyListener RetroactSwingOnKeyPressed)
@@ -653,6 +668,8 @@
 ; rendering state.
 (def attr-appliers
   {:accelerator            set-accelerator                  ; Java KeyStroke instances have identity and value congruence
+   :accessory              {:set (fn set-accessory [c ctx accessory] (.setAccessory c accessory))
+                            :get (fn get-accessory [c ctx] (.getAccessory c))}
    :always-on-top          (fn set-always-on-top [c ctx always-on-top] (.setAlwaysOnTop c always-on-top))
    :background             set-background
    :border                 borders/set-border               ; maps to border factory methods, see set-border
@@ -732,7 +749,7 @@
    :bottom-component       {:set (fn set-bottom-comp [c ctx comp] (.setBottomComponent c comp))
                             :get (fn get-bottom-comp [c ctx] (.getBottomComponent c))}
    :one-touch-expandable   (fn set-one-touch-expandable [c ctx expandable] (.setOneTouchExpandable c expandable))
-   :orientation            (fn set-orientation [c ctx orientation] (.setOrientation c (orientation-map orientation)))
+   :orientation            set-orientation
    :divider-location       (fn set-divider-location [c ctx location]
                              (log/warn "setting divider location to" location)
                              (if (int? location)
@@ -785,6 +802,7 @@
    :on-change              on-change
    :on-component-resize    on-component-resize
    :on-component-hidden    on-component-hidden
+   :on-component-shown     on-component-shown
    :on-focus-gained        on-focus-gained
    :on-focus-lost          on-focus-lost
    :on-key-pressed         on-key-pressed

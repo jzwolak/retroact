@@ -449,12 +449,12 @@
 ; "start-main-loop" then.
 
 (defn- recreate-attrs-changed? [onscreen-component attr-appliers old-view new-view]
-  (let [new-attrs (keys new-view)]
+  (let [attrs (keys new-view)]
     (some (fn [attr]
             (let [recreate-classes (get-in attr-appliers [attr :recreate] [])]
               (some (fn [klass] (and (instance? klass onscreen-component) (not= (get old-view attr) (get new-view attr))))
                     recreate-classes)))
-          new-attrs)))
+          attrs)))
 
 (defn- onscreen-component-reusable? [{:keys [attr-appliers] :as ctx} onscreen-component old-view new-view]
   (cond

@@ -10,15 +10,13 @@
 (defn retroact-initiated? []
   (let [event (EventQueue/getCurrentEvent)
         retroact-event? (.contains @retroact-events-in-queue event)]
-    (log/info "retroact-initiated?: event =" event)
-    (log/info "is retroact event?" retroact-event?)
-    (log/info "retroact event size =" (.size @retroact-events-in-queue))
+    #_(log/info "retroact-initiated?: event =" event)
+    #_(log/info "is retroact event?" retroact-event?)
+    #_(log/info "retroact event size =" (.size @retroact-events-in-queue))
     (when (and (instance? RetroactInvocationEvent event) (not retroact-event?))
-      (try
-        (log/warn "event is RetroactInvocationEvent and not detected as retroact event!" event)
-        (throw (Exception. "get captured stack"))
-        (catch Exception ex
-          (log/info ex "full stacktrace with captured stack" event))))
+      (log/warn "event is RetroactInvocationEvent and not detected as retroact event!" event)
+      (log/warn (Exception. "get captured stack") "full stacktrace with captured stack" event)
+      (throw (Exception. "get captured stack")))
     #_(when (> 3 (.size @retroact-events-in-queue))
       (log/info "outputting all events in queue...")
       (doseq [e @retroact-events-in-queue]
@@ -31,16 +29,16 @@
                (.contains @retroact-events-in-queue (EventQueue/getCurrentEvent)))
            (not (nil? event)))
     (do
-      (log/info (Exception. "stacktrace") "adding event to retroact-events-in-queue: event =" event)
+      #_(log/info (Exception. "stacktrace") "adding event to retroact-events-in-queue: event =" event)
       (.add @retroact-events-in-queue event))
-    (log/info (Exception. "stacktrace") "not adding event to retroact-events-in-queue: event =" event)))
+    #_(log/info (Exception. "stacktrace") "not adding event to retroact-events-in-queue: event =" event)))
 
 (defn- register-event-queue
   "Call this on first event post to register the retroact custom event queue which tracks whether
   events originated from Retroact or elsewhere. Call it only once, which is why there is a `delay` to access it."
   []
   #_(log/info "event-queue =" (.getSystemEventQueue (Toolkit/getDefaultToolkit)))
-  (log/info "installing retroact custom event queue")
+  #_(log/info "installing retroact custom event queue")
   (->
     (Toolkit/getDefaultToolkit)
     (.getSystemEventQueue)

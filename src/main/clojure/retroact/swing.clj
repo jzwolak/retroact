@@ -207,6 +207,12 @@
   (let [scroll-bar (.getHorizontalScrollBar c)]
     (set-scroll-bar scroll-bar position)))
 
+(defn- set-horizontal-scroll-bar-policy [c ctx policy]
+  (.setHorizontalScrollBarPolicy c policy))
+
+(defn- set-vertical-scroll-bar-policy [c ctx policy]
+  (.setVerticalScrollBarPolicy c policy))
+
 (defn- get-default-size [c]
   (let [preferred-size (.getPreferredSize c)
         _ (.setPreferredSize c nil)
@@ -375,6 +381,7 @@
    :panel                      JPanel
    :popup-menu                 JPopupMenu
    :option-pane                create/create-joption-pane
+   :overlay-layout             create/create-overlay-layout
    :scroll-pane                JScrollPane
    :separator                  JSeparator
    :split-pane                 JSplitPane
@@ -670,6 +677,8 @@
   {:accelerator            set-accelerator                  ; Java KeyStroke instances have identity and value congruence
    :accessory              {:set (fn set-accessory [c ctx accessory] (.setAccessory c accessory))
                             :get (fn get-accessory [c ctx] (.getAccessory c))}
+   :alignment-x            (fn set-alignment-x [c ctx alignment] (.setAlignmentX c alignment))
+   :alignment-y            (fn set-alignment-y [c ctx alignment] (.setAlignmentY c alignment))
    :always-on-top          (fn set-always-on-top [c ctx always-on-top] (.setAlwaysOnTop c always-on-top))
    :background             set-background
    :border                 borders/set-border               ; maps to border factory methods, see set-border
@@ -685,7 +694,7 @@
    :editable               set-editable
    :enabled                set-enabled
    :extensions             {:recreate [FileNameExtensionFilter]}
-   :file-filter            {:set (fn set-file-filter [c ctx file-filter] (.setFileFilter c file-filter))
+   :file-filter            {:set (fn set-file-filter [c ctx file-filter] (log/info "setting file filter to " file-filter) (.setFileFilter c file-filter))
                             :get (fn get-file-filter [c ctx] (.getFileFilter c))}
    :focusable              (fn set-focusable [c ctx focusable] (.setFocusable c focusable))
    :font                   (fn set-font [c ctx font] (.setFont c font))
@@ -784,9 +793,11 @@
    ; End tree attr appliers
    ; Scroll pane appliers
    :horizontal-scroll-bar  set-horizontal-scroll-bar
+   :horizontal-scroll-bar-policy set-horizontal-scroll-bar-policy
    :on-vertical-scroll     on-vertical-scroll
    :on-horizontal-scroll   on-horizontal-scroll
    :vertical-scroll-bar    set-vertical-scroll-bar
+   :vertical-scroll-bar-policy set-vertical-scroll-bar-policy
    :viewport-border        borders/set-viewport-border
    :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
                             :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
@@ -852,6 +863,7 @@
    :get-view                  `util/get-view
    :assoc-ctx                 `util/assoc-ctx
    :get-ctx                   `util/get-ctx
+   :clear-onscreen-component  `util/clear-onscreen-component
    :redraw-onscreen-component `redraw-onscreen-component
    :class-map                 `class-map
    :run-on-toolkit-thread     `run-on-toolkit-thread})

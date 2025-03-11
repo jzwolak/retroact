@@ -329,7 +329,7 @@ Example with render...
  :render (fn [app-ref app-val] {:class :panel :contents [...]}}
 ```
 
-Retroact has support for side effects, but be careful. Somethings should _not_ be side effects. Side effects are also
+Retroact has support for side effects, but be careful. Some things should _not_ be side effects. Side effects are also
 expensive. All side effects are called everytime the app-ref value is changed. Therefore, the first thing the side
 effect should do is check that something changed to warrant it running. This would likely involve a change from old-val
 to new-val for a specific path in the app-ref. A change should be looked for, not a specific value. Because later calls

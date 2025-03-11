@@ -1,7 +1,8 @@
 (ns retroact.swing.create-fns
-  (:import (java.awt Color Font Frame Window)
+  (:require [clojure.tools.logging :as log])
+  (:import (java.awt Color FlowLayout Font Frame Window)
            (java.util Map)
-           (javax.swing Box JDialog JOptionPane JTextArea)
+           (javax.swing Box JDialog JOptionPane JTextArea OverlayLayout)
            (javax.swing.filechooser FileNameExtensionFilter)))
 
 (defn create-color
@@ -42,6 +43,11 @@
       (into-array Object options)
       nil)
     (:initial-value view)))
+
+(defn create-overlay-layout [{:keys [parent-onscreen-component] :as ctx}]
+  (log/info "overlay layout got view:" (:view ctx))
+  (log/info "overlay layout got parent:" (:parent-onscreen-component ctx))
+  (OverlayLayout. parent-onscreen-component))
 
 (defn create-file-name-extension-filter [{:keys [view]}]
   (FileNameExtensionFilter. (:description view) (into-array String (:extensions view))))

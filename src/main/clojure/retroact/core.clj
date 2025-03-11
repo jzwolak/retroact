@@ -1,5 +1,6 @@
 (ns retroact.core
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
+            [clojure.set :as set]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
             [retroact.algorithms.core :as ra]
@@ -58,9 +59,14 @@
 ; from the main loop.
 ; Or maybe not... I just moved more of the state from the Retroact main loop to here... as an attempt to enable
 ; namespace reloading without core.async errors.
-(defonce retroact-state (atom {:app-refs []
-                               :app-ref->components {}
-                               :id->comp {}}))
+(defonce retroact-state (atom {:app-refs                              []
+                               :app-ref->components                   {}
+                               :id->comp                              {}
+                               :main-loop-single-iteration-running    false
+                               :main-loop-single-iteration-start-time nil
+                               :shutting-down                         false}))
+
+(def main-loop-single-iteration-timeout 7000)
 
 (declare build-ui)
 (declare update-component)
@@ -139,13 +145,13 @@
         (let [sub-component (build-ui ctx new-sub-view)]
           (tk/run-on-toolkit-thread ctx set-sub-comp component ctx sub-component))
       (should-update-sub-comp? old-sub-view new-sub-view)
-        (apply-attributes
-          ; NOTE: I left :old-view here so that it doesn't break things. Because in some cases the onscreen-component
-          ; may not have the view. See swing/set-client-prop. It ignores non-JComponent objects.
-          (assoc
-            (assoc-component-ctx
-              ctx (tk/run-on-toolkit-thread-with-result ctx get-sub-comp component ctx) new-sub-view)
-            :old-view old-sub-view))
+      (let [sub-component (tk/run-on-toolkit-thread-with-result ctx get-sub-comp component ctx)
+            ; NOTE: I left :old-view here so that it doesn't break things. Because in some cases the onscreen-component
+            ; may not have the view. See swing/set-client-prop. It ignores non-JComponent objects.
+            updated-sub-component (apply-attributes (assoc (assoc-component-ctx ctx sub-component new-sub-view)
+                                                      :old-view old-sub-view))]
+        (when (not= sub-component updated-sub-component)
+          (tk/run-on-toolkit-thread ctx set-sub-comp component updated-sub-component)))
       (should-remove-sub-comp? old-sub-view new-sub-view) (tk/run-on-toolkit-thread ctx set-sub-comp component ctx nil)
       :default (do)                                         ; no-op. Happens if both are nil or they are equal
       )))
@@ -264,7 +270,10 @@
   (loop [unsorted-attrs (set attr-keys) sorted-attrs []]
     (let [ready-attrs (filter (fn dependencies-met [attr]
                                 (let [deps (get-in attr-appliers [attr :deps])]
-                                  (or (not deps)
+                                  (not (some unsorted-attrs deps))
+                                  ; pretty sure (not deps) is not necessary since (some unsorted-attrs nil) returns nil
+                                  ; which is false, so use the form above instead
+                                  #_(or (not deps)
                                       (not (some unsorted-attrs deps)))))
                               unsorted-attrs)]
       (if (not-empty ready-attrs)
@@ -309,12 +318,11 @@
           (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
           (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component. But only when attribute val changed.
-          :else (if (or (not (= (get old-view attr) (get new-view attr)))
-                        (not (= (contains? old-view attr) (contains? new-view attr))))
-                  (do
-                    (tk/run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
-                                              (assoc ctx :attr attr)
-                                              (get new-view attr)))))))
+          :else (when (or (not (= (get old-view attr) (get new-view attr)))
+                          (not (= (contains? old-view attr) (contains? new-view attr))))
+                  (tk/run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
+                                            (assoc ctx :attr attr)
+                                            (get new-view attr))))))
     ; Some code relies on the value of view to be the old view until attr appliers complete. But eventually it'd be
     ; nice to remove this in favor of assoc-ctx, but beware since there's an assoc-ctx at the beginning of this fn.
     ; So maybe ctx won't work for this because it will change just before calling the appliers.
@@ -331,10 +339,11 @@
         ;_ (log/info "building view for" id "log msg4")
         final-class-map (merge (tk/get-in-toolkit-config ctx :class-map) (:class-map retroact-config))
         class-or-fn (get-in final-class-map [(:class view)] (get final-class-map :default))
-        ctx (-> ctx
-                (dissoc :new-view)
-                (assoc :view view
-                       :update-component update-component))]
+        ctx (cond-> ctx
+                    true (dissoc :new-view)
+                    true (assoc :view view
+                                :update-component update-component)
+                    (:onscreen-component ctx) (set/rename-keys {:onscreen-component :parent-onscreen-component}))]
     (tk/run-on-toolkit-thread-with-result
       ctx
       #(cond
@@ -411,6 +420,7 @@
   ; Update view when state changed
   (when (not= old-value new-value)
     (call-side-effects app-ref old-value new-value)
+    (log/info "app-watch calling trigger-update-view")
     (trigger-update-view app-ref new-value)))
 
 ; for debugging
@@ -539,6 +549,7 @@
   ; component objects matching the onscreen-components. So we use it.
   (reduce-kv
     (fn render-onscreen-comp [m comp-id comp]
+      (log/info "updating component with id" comp-id)
       (assoc m comp-id (update-component ctx comp)))
     ; This is the only reference to components in app. All other references to components is the local components to
     ; the retroact-main-loop. It's here because there may be multiple apps running and the main loop services them all.
@@ -582,11 +593,44 @@
     (doseq [[comp-id component] components]
       (log/info comp-id "->" (:onscreen-component component)))))
 
-(defn- execute-main-loop-single-iteration [chans]
+(defn- alter-app-ref! [app-ref f & args]
+  "Alters value of app-ref by applying f to the current value. Works on ref/atom/agent types and returns a valid value
+  of the ref at some point. For atoms and refs the value is guaranteed to be the value immediately following the alter.
+  For agents the value is non-deterministic but will be a valid value at some point in the agent's history."
+  (condp instance? app-ref
+    Atom (apply swap! app-ref f args)
+    Ref (dosync (apply alter app-ref f args) @app-ref)
+    Agent (do (apply send app-ref f args) @app-ref)
+    (throw (IllegalStateException. (str "Type of app-ref is not one of Atom, Ref, or Agent. Instead it's " (class app-ref))))))
+
+(defn- touch [app-val]
+  (update-in app-val [:retroact :touch]
+             (fn [touch-counter]
+               (if touch-counter (inc' touch-counter) 0))))
+
+(defn- rerender-all-impl []
+  (log/info "rerendering all")
+  (let [app-ref->components (:app-ref->components @retroact-state)
+        app-refs (keys app-ref->components)]
+    (doseq [[app-ref onscreen-components] app-ref->components]
+      (let [app-val @app-ref
+            ctx (create-ctx app-ref app-val)
+            clear-onscreen-component (tk/get-in-toolkit-config ctx :clear-onscreen-component)]
+        (doseq [onscreen-component onscreen-components]
+          (tk/run-on-toolkit-thread ctx clear-onscreen-component onscreen-component))))
+    (doseq [app-ref app-refs]
+      ; touch app-ref to trigger watches
+      (alter-app-ref! app-ref touch))))
+
+(defn- execute-main-loop-single-iteration
+  "Non-blocking single iteration of Retroact's main loop. User code may be executed from here, and it must not block.
+  In addition, all code (including Retroact) must take less than the main-loop-single-iteration-timeout or an error
+  is generated."
+  [chans val port]
   ; There's one chan for each app-ref so that multiple state changes can be coalesced to a single update here because
   ; the chan for each app-ref has a sliding buffer of 1 - only the most recent update is taken (and necessary, since
   ; pure fns are supposed to be used to render view from state).
-  (let [[val port] (alts!! chans :priority true)
+  (let [                                                    ;[val port] (alts!! chans :priority true)
         cmd-name (first val)]
     (log/info "retroact-main-loop executing cmd" cmd-name)
     (condp = cmd-name
@@ -631,9 +675,11 @@
                        (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
                        chans)
       :remove-component (let [{:keys [comp-id app-ref]} (second val)]
+                          (log/info "removing component" comp-id)
                           (swap! retroact-state update-in [:app-ref->components app-ref] dissoc comp-id)
-                          ; TODO: remove the update-view-chan from chans?
+                          ; TODO: remove the update-view-chan from chans? no. Maybe if all components are dissoc, but still, careful
                           chans)
+      :rerender-all (do (rerender-all-impl) chans)
       :call-fn (let [[_ f args] val]
                  (apply f args)
                  chans)
@@ -647,36 +693,77 @@
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
   (loop [chans [retroact-cmd-chan]]
-    (let [new-chans
+    (let [[val port] (alts!! chans :priority true)
+          _ (log/info "record retroact iteration start time")
+          _ (swap! retroact-state assoc
+                   :main-loop-single-iteration-running true
+                   :main-loop-single-iteration-start-time (System/currentTimeMillis))
+          new-chans
           (try
-            (execute-main-loop-single-iteration chans)
+            ; execute-main-loop-single-iteration must be non-blocking
+            (execute-main-loop-single-iteration chans val port)
             (catch Exception ex
               (log/error ex "unhandled exception encountered in retroact main loop, logging and passing to uncaught exception handler")
               (handle-uncaught-exception ex)
               chans))]
+      (swap! retroact-state assoc
+             :main-loop-single-iteration-running false
+             :main-loop-single-iteration-start-time nil)
+      (log/info "record retroact iteration end")
       (cond
-        (= :shutdown new-chans) (log/trace "retroact clean shutdown")
+        (= :shutdown new-chans) (do
+                                  (swap! retroact-state assoc :shutting-down true)
+                                  (log/trace "retroact clean shutdown"))
         new-chans (recur new-chans)
-        :else (log/error "retroact got nil or false from main loop unexpectedly, shutting down.")))))
+        :else (do
+                ; Really, I should have tests for each branch in the main loop... but that's a lot of work, so here's a catchall for now.
+                (log/error "retroact got nil or false from main loop unexpectedly, using previous chans for next iteration")
+                (recur chans))))))
 
-(defn- retroact-main []
+(defn- retroact-guard [retroact-main-thread]
+  (try
+    (loop [previous-thread-state nil]
+      (let [{:keys
+             [main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down]}
+            @retroact-state
+            thread-state (.getState retroact-main-thread)]
+        (when (not shutting-down)
+          (if main-loop-single-iteration-running
+            (let [remaining-time
+                  (- main-loop-single-iteration-timeout
+                     (- (System/currentTimeMillis)
+                        main-loop-single-iteration-start-time))]
+              (when (< 0 remaining-time)
+                (Thread/sleep remaining-time))
+              (if (not= main-loop-single-iteration-start-time (:main-loop-single-iteration-start-time @retroact-state))
+                (recur thread-state)
+                (do
+                  (log/warn (str "retroact main loop taking more than " main-loop-single-iteration-timeout "ms"))
+                  (.interrupt retroact-main-thread)
+                  ; This is just to avoid too main repeats of this warning.
+                  #_(Thread/sleep main-loop-single-iteration-timeout)
+                  (recur thread-state))))
+            (do
+              (Thread/sleep main-loop-single-iteration-timeout)
+              (recur thread-state))))))
+    (finally (log/info "retroact guard thread shutdown"))))
+
+(defn- start-retroact-threads
+  "Called once the first time a retroact command is executed. See retroact-cmd-chan."
+  []
   (let [retroact-cmd-chan (chan (buffer 100))
-        retroact-thread (Thread. (fn retroact-main-runnable [] (retroact-main-loop retroact-cmd-chan)))]
-    (.setName retroact-thread (str "Retroact-" (gen-retroact-thread-id)))
-    (.start retroact-thread)
+        retroact-main-thread (Thread. (fn retroact-main-runnable [] (retroact-main-loop retroact-cmd-chan))
+                                      "Retroact-Main")
+        retroact-guard-thread (Thread. (fn retroact-guard-runnable [] (retroact-guard retroact-main-thread))
+                                       "Retroact-Guard")]
+    (.start retroact-main-thread)
+    (.start retroact-guard-thread)
     retroact-cmd-chan))
 
-(def retroact-cmd-chan (delay (retroact-main)))
-
-(defn- alter-app-ref! [app-ref f & args]
-  "Alters value of app-ref by applying f to the current value. Works on ref/atom/agent types and returns a valid value
-  of the ref at some point. For atoms and refs the value is guaranteed to be the value immediately following the alter.
-  For agents the value is non-deterministic but will be a valid value at some point in the agent's history."
-  (condp instance? app-ref
-    Atom (apply swap! app-ref f args)
-    Ref (dosync (apply alter app-ref f args) @app-ref)
-    Agent (do (apply send app-ref f args) @app-ref)
-    (throw (IllegalStateException. (str "Type of app-ref is not one of Atom, Ref, or Agent. Instead it's " (class app-ref))))))
+; When the user creates a component, runs a command on the retroact thread, calls rerender-all!, or some other retroact
+; fn that must execute on the retroact thread in the main loop, this chan takes that command. The main thread waits for
+; commands on this channel as well as other internal channels.
+(def retroact-cmd-chan (delay (start-retroact-threads)))
 
 (defn- check-side-effect-structure
   [side-effect]
@@ -699,12 +786,21 @@
   (let [side-effects-to-add (filter (comp fn? last) side-effect)]
     (update-in app-val [:retroact :side-effects] merge side-effects-to-add)))
 
+(defn rerender-all!
+  "Reapplies all attributes of all onscreen components as if they are being rendered for the first time. This is not
+  idempotent like other retroact fns, but it does play nice with all other fns. If this fn doesn't finish (or even
+  start) the rerendering then rerendering will automatically complete whenever Retroact gets the chance. This happens
+  as a consequence of how Retroact is design and is not a special feature, therefore, it should really work, all the
+  time without fail."
+  []
+  (go (>! @retroact-cmd-chan [:rerender-all])))
+
 (defn destroy-comp
   "Destroy a component. You'll need to keep comp-id created with create-comp in order to call this."
   [app-ref comp-id]
   (run-cmd [:remove-component {:app-ref app-ref :comp-id comp-id}]))
 
-(defn validate-comp [comp]
+(defn- validate-comp [comp]
   (when (not (:render comp)) (Exception. "comp does not contain a render fn at :render")))
 
 (defn create-comp

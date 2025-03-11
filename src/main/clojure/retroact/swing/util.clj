@@ -1,5 +1,5 @@
 (ns retroact.swing.util
-  (:import (java.awt Component)
+  (:import (java.awt Component Container)
            (javax.swing JComponent)
            (java.util WeakHashMap)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)))
@@ -79,3 +79,20 @@
       (set-client-prop onscreen-component "comp-id" comp-id)
       comp-id)))
 
+(defn- clear-single-onscreen-component [onscreen-component]
+  (assoc-view onscreen-component nil)
+  (assoc-ctx onscreen-component nil))
+
+(defn clear-onscreen-component
+  "Clears Retroact data from the onscreen component and all its children, but not \"children\" for things like
+  get/set layout. Just AWT/Swing children for AWT Container objects."
+  [onscreen-component]
+  (loop [onscreen-components [onscreen-component]]
+    (let [onscreen-component (first onscreen-components)]
+      (cond
+        (nil? onscreen-component) (do #_exit-loop)
+        (instance? Container onscreen-component) (do (clear-single-onscreen-component onscreen-component)
+                                                     (recur (into [] (concat (rest onscreen-components)
+                                                                             (.getComponents onscreen-component)))))
+        :else (do (clear-single-onscreen-component onscreen-component)
+                  (recur (rest onscreen-components)))))))

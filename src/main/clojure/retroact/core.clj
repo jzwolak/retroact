@@ -1,8 +1,10 @@
 (ns retroact.core
   (:require [clojure.core.async :refer [>! alts!! buffer chan go sliding-buffer]]
+            [clojure.data :as data]
             [clojure.set :as set]
             [clojure.set :refer [difference union]]
             [clojure.tools.logging :as log]
+            [retroact.debug :refer [debug]]
             [retroact.algorithms.core :as ra]
             [retroact.error-handling :refer [handle-uncaught-exception]]
             [retroact.swing :as swing]
@@ -66,7 +68,7 @@
                                :main-loop-single-iteration-start-time nil
                                :shutting-down                         false}))
 
-(def main-loop-single-iteration-timeout 7000)
+(def main-loop-single-iteration-timeout (if debug 120000 7000))
 
 (declare build-ui)
 (declare update-component)
@@ -640,6 +642,10 @@
       :update-view (let [[_ app-ref app-val] val
                          ctx (create-ctx app-ref app-val)
                          components (get-in @retroact-state [:app-ref->components app-ref] {})
+                         last-rendered-app-val (get @retroact-state :last-rendered-app-val)
+                         ;app-val-diff (data/diff last-rendered-app-val app-val)
+                         ;_ (log/info "only in last-rendered-app-val:" (first app-val-diff))
+                         ;_ (log/info "only in app-val:" (second app-val-diff))
                          next-components (update-components ctx components)]
                      ; - recur with update-view-chans that has update-view-chan at end so that we can guarantee earlier chans get read. Check alt!!
                      ;   to be sure priority is set - I remember seeing that somewhere.
@@ -657,7 +663,11 @@
                      ; because the only code that would be affected by such user actions would be the code right here and since this
                      ; code is blocking until the swap! completes... there's no problem.
                      ; TODO: move update-view-chan to end of update-view-chans so that there are no denial of service issues.
-                     (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
+                     #_(swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
+                     (swap! retroact-state (fn [rs]
+                                             (-> rs
+                                                 (assoc-in [:app-ref->components app-ref] next-components)
+                                                 (assoc-in [:last-rendered-app-val] app-val))))
                      chans)
       :update-view-chan (let [update-view-chan (second val)] (conj chans update-view-chan))
       :add-component (let [{:keys [component app-ref app-val]} (second val)
@@ -692,9 +702,10 @@
 
 (defn- retroact-main-loop [retroact-cmd-chan]
   (log/trace "STARTING RETROACT MAIN LOOP")
-  (loop [chans [retroact-cmd-chan]]
+  (loop [chans [retroact-cmd-chan] iter-num 0]
     (let [[val port] (alts!! chans :priority true)
-          _ (log/info "record retroact iteration start time")
+
+          _ (log/info "record retroact iteration start time for iteration" iter-num)
           _ (swap! retroact-state assoc
                    :main-loop-single-iteration-running true
                    :main-loop-single-iteration-start-time (System/currentTimeMillis))
@@ -702,23 +713,27 @@
           (try
             ; execute-main-loop-single-iteration must be non-blocking
             (execute-main-loop-single-iteration chans val port)
+            (catch InterruptedException iex
+              (log/warn iex "retroact main loop interrupted, probably because it's taking too long. It will continue and try again.")
+              chans)
             (catch Exception ex
               (log/error ex "unhandled exception encountered in retroact main loop, logging and passing to uncaught exception handler")
               (handle-uncaught-exception ex)
+              (log/error "finished handling uncaught exception")
               chans))]
       (swap! retroact-state assoc
              :main-loop-single-iteration-running false
              :main-loop-single-iteration-start-time nil)
-      (log/info "record retroact iteration end")
+      (log/info "record retroact iteration end for iteration" iter-num)
       (cond
         (= :shutdown new-chans) (do
                                   (swap! retroact-state assoc :shutting-down true)
                                   (log/trace "retroact clean shutdown"))
-        new-chans (recur new-chans)
+        new-chans (recur new-chans (inc iter-num))
         :else (do
                 ; Really, I should have tests for each branch in the main loop... but that's a lot of work, so here's a catchall for now.
                 (log/error "retroact got nil or false from main loop unexpectedly, using previous chans for next iteration")
-                (recur chans))))))
+                (recur chans (inc iter-num)))))))
 
 (defn- retroact-guard [retroact-main-thread]
   (try
@@ -727,12 +742,14 @@
              [main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down]}
             @retroact-state
             thread-state (.getState retroact-main-thread)]
+        (log/info "retroact-guard has state:" previous-thread-state thread-state main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down)
         (when (not shutting-down)
           (if main-loop-single-iteration-running
             (let [remaining-time
                   (- main-loop-single-iteration-timeout
                      (- (System/currentTimeMillis)
                         main-loop-single-iteration-start-time))]
+              (log/info "retroact-guard remaining-time =" remaining-time "(sleeping for this amount if not zero)")
               (when (< 0 remaining-time)
                 (Thread/sleep remaining-time))
               (if (not= main-loop-single-iteration-start-time (:main-loop-single-iteration-start-time @retroact-state))
@@ -741,7 +758,7 @@
                   (log/warn (str "retroact main loop taking more than " main-loop-single-iteration-timeout "ms"))
                   (.interrupt retroact-main-thread)
                   ; This is just to avoid too main repeats of this warning.
-                  #_(Thread/sleep main-loop-single-iteration-timeout)
+                  (Thread/sleep main-loop-single-iteration-timeout)
                   (recur thread-state))))
             (do
               (Thread/sleep main-loop-single-iteration-timeout)

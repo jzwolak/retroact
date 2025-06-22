@@ -158,7 +158,7 @@ There are three important differences between this "legacy" component and a stan
    render fn has changed and the update fn must apply those updates to the onscreen component.
 3. The render fn returns an arbitrary map that is only semantically meaningful to `update-my-component`. This map is not
    used in other parts of Retroact - unlike the maps for Swing components - except to compare equality to determine if
-   the udpate fn should be called.
+   the update fn should be called.
 
 And so, here is the update fn.
 

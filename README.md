@@ -310,6 +310,8 @@ these loops do not occur, but they may occur when the onscreen component state a
 the onscreen component state may be directly modified by the user. In such cases, checking if a modification came from
 the user (mouse or key event) can break the loop. Here's code I've used to do this check.
 
+Update: this is probably now `retroact-initiated?` and is the inverse of `user-initiated?`. I need to double check this.
+
 ```clojure
 (defn user-initiated? []
   (let [cause (EventQueue/getCurrentEvent)]

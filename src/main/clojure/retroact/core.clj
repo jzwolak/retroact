@@ -78,21 +78,23 @@
 
 (defonce retroact-thread-id (atom -1))
 
+; Delete this?
 (defn gen-retroact-thread-id []
   (swap! retroact-thread-id inc))
 
 
+; Delete this??
 (defn comp-summary [comp]
   (select-keys comp #{:comp-id :name :class}))
 
 
-(defn component-applier? [attr-applier]
+(defn- component-applier? [attr-applier]
   (and (map? attr-applier)
        (contains? attr-applier :set)
        (contains? attr-applier :get)))
 
 
-(defn children-applier?
+(defn- children-applier?
   [attr-applier]
   (and (map? attr-applier)
        (contains? attr-applier :get-existing-children)
@@ -102,7 +104,7 @@
 
 (declare apply-attributes)
 
-(defn pad [col length]
+(defn- pad [col length]
   (vec (take length (concat col (repeat nil)))))
 
 (defn- should-build-sub-comp? [old-sub-comp new-sub-comp]
@@ -295,7 +297,7 @@
     (get attr-applier :fn default-applier-fn)
     attr-applier))
 
-(defn apply-attributes
+(defn- apply-attributes
   "Takes the diff of the old-view and new-view and applies only the changes to the onscreen component. The old-view is
   the one from the previous @app-ref render call. It is _not_ the one stored in the component. When children components
   are being used it's impossible to tell if the child component is associated with the previous old-view or not and
@@ -332,7 +334,7 @@
     (tk/assoc-ctx (assoc ctx :view new-view) onscreen-component))
   onscreen-component)
 
-(defn instantiate-class
+(defn- instantiate-class
   [ctx view]
   (let [app-val (:app-val ctx)
         retroact-config (:retroact app-val)
@@ -359,14 +361,14 @@
 
 ; TODO: perhaps build-ui is more like build-object because :mig-layout is not a UI. And the way things are setup,
 ; any object can be built with this code.
-(defn build-ui
+(defn- build-ui
   "Take a view and realize it."
   [ctx view]
   (let [onscreen-component (instantiate-class ctx view)]
     (apply-attributes (assoc-component-ctx ctx onscreen-component view))))
 
 
-(defn component-did-mount? [old-value new-value]
+(defn- component-did-mount? [old-value new-value]
   (let [old-components (get old-value :components {})
         new-components (get new-value :components {})]
     (if (not= old-components new-components)
@@ -410,14 +412,17 @@
   [cmd]
   (go (>! @retroact-cmd-chan cmd)))
 
-(defn run-later [f & args]
+(defn run-later
+  "Run f with args on the Retroact thread after the currently queued commands and before any commands queued after this
+  call. This is the same thread Retroact uses to update components."
+  [f & args]
   (let [cmd [:call-fn f args]]
     (go (>! @retroact-cmd-chan cmd))))
 
 (defn- trigger-update-view [app-ref app-val]
   (run-on-app-ref-chan app-ref [:update-view app-ref app-val]))
 
-(defn app-watch
+(defn- app-watch
   [watch-key app-ref old-value new-value]
   ; Update view when state changed
   (when (not= old-value new-value)
@@ -742,7 +747,7 @@
              [main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down]}
             @retroact-state
             thread-state (.getState retroact-main-thread)]
-        (log/info "retroact-guard has state:" previous-thread-state thread-state main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down)
+        #_(log/info "retroact-guard has state:" previous-thread-state thread-state main-loop-single-iteration-running main-loop-single-iteration-start-time shutting-down)
         (when (not shutting-down)
           (if main-loop-single-iteration-running
             (let [remaining-time

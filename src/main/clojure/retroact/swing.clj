@@ -21,7 +21,7 @@
            (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter FocusListener KeyListener MouseAdapter MouseListener MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
            (java.util WeakHashMap)
-           (javax.swing JButton JCheckBox JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities TransferHandler WindowConstants)
+           (javax.swing JButton JCheckBox JCheckBoxMenuItem JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JProgressBar JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities TransferHandler WindowConstants)
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
@@ -120,7 +120,8 @@
 
 
 (defn retroact-initiated?
-  "This only works sometimes in some cases. It needs to be refined. See comments for retroact-initiated var."
+  "This only works sometimes in some cases. It needs to be refined. See comments for retroact-initiated var.
+  Update: maybe this was refined. The RetroactInvocationEvent definitely improved this."
   []
   #_(let [instance-of (instance? RetroactInvocationEvent (EventQueue/getCurrentEvent))
         edt (SwingUtilities/isEventDispatchThread)
@@ -366,6 +367,7 @@
    :button                     JButton
    :card-layout                CardLayout
    :check-box                  JCheckBox
+   :check-box-menu-item        JCheckBoxMenuItem
    :combo-box                  create-jcombobox
    :dialog                     create/create-jdialog                            ; uses :owner attr in constructor
    :empty-border               borders/create-empty-border
@@ -380,6 +382,7 @@
    :mig-layout                 MigLayout
    :panel                      JPanel
    :popup-menu                 JPopupMenu
+   :progress-bar               JProgressBar
    :option-pane                create/create-joption-pane
    :overlay-layout             create/create-overlay-layout
    :scroll-pane                JScrollPane
@@ -680,6 +683,7 @@
    :alignment-x            (fn set-alignment-x [c ctx alignment] (.setAlignmentX c alignment))
    :alignment-y            (fn set-alignment-y [c ctx alignment] (.setAlignmentY c alignment))
    :always-on-top          (fn set-always-on-top [c ctx always-on-top] (.setAlwaysOnTop c always-on-top))
+   :approve-button-text    (fn set-approve-button-text [c ctx text] (.setApproveButtonText c text))
    :background             set-background
    :border                 borders/set-border               ; maps to border factory methods, see set-border
    :caret-position         (fn set-caret-position [c ctx position] (.setCaretPosition c position))
@@ -776,6 +780,12 @@
    :tab-tooltip            set-tab-tooltip
    ; List attr appliers
    :list-data              set-list-data
+   ; Progress bar appliers
+   :maximum                (fn set-maximum [c ctx maximum] (.setMaximum c maximum))
+   :minimum                (fn set-minimum [c ctx minimum] (.setMinimum c minimum))
+   :value                  (fn set-value [c ctx value] (.setValue c value))
+   :string                 (fn set-string [c ctx string] (.setString c string)) ; maybe make this part of :text??
+   ; End progress bar appliers
    ; Table attr appliers
    :column-names           set-column-names
    :row-editable-fn        set-row-editable-fn

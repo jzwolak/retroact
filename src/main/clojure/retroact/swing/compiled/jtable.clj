@@ -12,7 +12,7 @@
 ; Take an
 ; - app ref
 ; - fn to get data (or path to data) as vector of rows
-; - fn to get colomns from a row (row-fn)
+; - fn to get columns from a row (row-fn)
 ; - or maybe just a fn to get matrix of data (this idea was discarded, though, the default row-fn is the identity fn)
 ; Retroact knows when the data has changed and can tell the table model to update. If the app ref has changed or any of
 ; the data fns, then Retroact creates a new table model and sets the new table model on the JTable.

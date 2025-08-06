@@ -48,7 +48,7 @@ Retroact has a couple unique contributions to the software developer community.
 
 ```gradle
 dependencies {
-    implementation 'com.insilicalabs:retroact:0.2.4'
+    implementation 'com.insilicalabs:retroact:0.5.1'
 }
 ```
 
@@ -456,7 +456,7 @@ connect to an nREPL server (e.g., IntelliJ has a builtin connect to nREPL run co
 "Edit Configurations"). From the REPL run
 
 ```
-=> require '[retroact.test] :reload)
+=> (require '[retroact.test] :reload)
 ```
 
 You may rerun the above command as much as you like without restarting the nREPL server. You will, of course, need to

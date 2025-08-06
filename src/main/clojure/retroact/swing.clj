@@ -158,7 +158,7 @@
   (set-property-on-root-pane c (create/create-color color) #(.getForeground %) #(.setForeground %1 %2)))
 
 (defn set-columns [c ctx num-columns]
-  (.setColumns c num-columns))
+  (set-property c num-columns #(.getColumns %) #(.setColumns %1 %2)))
 
 (defn update-client-properties [c ctx properties]
   (let [{:keys [old-view attr]} ctx
@@ -198,7 +198,7 @@
   (.setToolTipText c tool-tip-text))
 
 (defn- set-scroll-bar [scroll-bar position]
-  (.setValue scroll-bar position))
+  (set-property scroll-bar position #(.getValue %) #(.setValue %1 %2)))
 
 (defn- set-vertical-scroll-bar [c ctx position]
   (let [scroll-bar (.getVerticalScrollBar c)]
@@ -209,10 +209,10 @@
     (set-scroll-bar scroll-bar position)))
 
 (defn- set-horizontal-scroll-bar-policy [c ctx policy]
-  (.setHorizontalScrollBarPolicy c policy))
+  (set-property c policy #(.getHorizontalScrollBarPolicy %) #(.setHorizontalScrollBarPolicy %1 %2)))
 
 (defn- set-vertical-scroll-bar-policy [c ctx policy]
-  (.setVerticalScrollBarPolicy c policy))
+  (set-property c policy #(.getVerticalScrollBarPolicy %) #(.setVerticalScrollBarPolicy %1 %2)))
 
 (defn- get-default-size [c]
   (let [preferred-size (.getPreferredSize c)
@@ -565,7 +565,8 @@
                                    (drop [drop-event] (handler (assoc local-ctx :app-val @app-ref) drop-event))))]))
 
 (defn- set-drag-enabled [c ctx drag-enabled]
-  (.setDragEnabled (get-scrollable-view c) drag-enabled))
+  (let [c (get-scrollable-view c)]
+    (set-property c drag-enabled #(.getDragEnabled %) #(.setDragEnabled %1 %2))))
 
 (defn- set-transfer-handler [c ctx transfer-handler]
   (.setTransferHandler (get-scrollable-view c) transfer-handler))

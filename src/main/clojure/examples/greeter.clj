@@ -1,4 +1,6 @@
-(ns examples.greeter)
+(ns examples.greeter
+  (:require [clojure.tools.logging :as log])
+  (:import (javax.swing SwingUtilities)))
 
 (defn say-hi-action-handler
   [app-ref action-event]
@@ -21,8 +23,11 @@
    :component-did-mount
    (fn component-did-mount [onscreen-component app-ref app-value]
      (println "greeter app did mount")
-     (.pack onscreen-component)
-     (.setVisible onscreen-component true))
+     (SwingUtilities/invokeLater
+       #(do
+          (.pack onscreen-component)
+          (.setLocationRelativeTo onscreen-component nil)
+          (.setVisible onscreen-component true))))
    ; Called when a child is added, removed or "swapped". A swap is when a child is removed and a new one is added in its
    ; place.
    ; TODO: this is not implemented yet.
@@ -31,7 +36,9 @@
    ; from one to another.
    :children-changed
    (fn children-changed [component app-ref app-value]
-     (.pack component))
+     (SwingUtilities/invokeLater
+       #(do
+          (.pack component))))
    ; TODO: I can create fns to make these maps more expressive. As in:
    ; (frame {:background 0xff0000 :on-close :dispose :layout (mig-layout "flowy)}
    ;        (label (or (:greeting @app-state) "Hello World!"))

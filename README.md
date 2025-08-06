@@ -65,8 +65,11 @@ The following is a basic stateless "Hello World" app that displays a Swing JFram
   []
   {:component-did-mount
    (fn component-did-mount [onscreen-component app-ref app-value]
-     (.pack onscreen-component)
-     (.setVisible onscreen-component true))
+       (SwingUtilities/invokeLater
+         #(do
+            (.pack onscreen-component)
+            (.setLocationRelativeTo onscreen-component nil)
+            (.setVisible onscreen-component true))))
    :render
    (fn render [app-ref app-value]
      {:class      :frame

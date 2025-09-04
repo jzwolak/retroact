@@ -11,7 +11,8 @@
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
-            [retroact.swing.jtable :refer [create-jtable safe-table-model-set]]
+            [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
+                                          set-table-render-fn set-table-set-value-at-fn]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
@@ -489,6 +490,16 @@
              (.setRowSelectionInterval c start end)
              (.clearSelection c)))))))
 
+(defn set-column-selection-interval [c ctx [start end]]
+  (if (instance? JScrollPane c)
+    (set-column-selection-interval (get-scrollable-view c) ctx [start end])
+    (if (instance? JTable c)
+      (run-on-toolkit-thread
+        #(do
+           (if (and start end)
+             (.setColumnSelectionInterval c start end)
+             (.clearSelection c)))))))
+
 (defn set-text [text-component ctx text]
   ; This is a complex update because it's trying to avoid infinite cycles between the EDT and Retroact event loops.
   (let [text-in-field (str (.getText text-component))
@@ -720,6 +731,7 @@
    :opaque                 set-opaque
    :owner                  {:recreate [JDialog]}
    :row-selection-interval set-row-selection-interval
+   :column-selection-interval set-column-selection-interval
    :selected               (fn set-selected [c ctx selected?]
                              (.setSelected c (boolean selected?)))
    :selected-index         {:deps [:contents]
@@ -791,6 +803,9 @@
    :row-editable-fn        set-row-editable-fn
    :row-fn                 set-row-fn
    :table-data             set-table-data
+   :table-selection-fn     set-table-selection-fn
+   :table-render-fn        set-table-render-fn
+   :table-set-value-at-fn  set-table-set-value-at-fn
    ; Tree attr appliers
    ; TODO: implement this to set the scrolls on expand of JTree
    ;:scrolls-on-expand      set-scrolls-on-expand

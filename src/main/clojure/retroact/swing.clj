@@ -12,7 +12,7 @@
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
             [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
-                                          set-table-render-fn set-table-set-value-at-fn]]
+                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
@@ -457,6 +457,10 @@
   [c ctx row-fn]
   (safe-table-model-set c (memfn setRowFn row-fn) row-fn))
 
+(defn set-get-item-at-fn
+  [c ctx get-item-at-fn]
+  (safe-table-model-set c (memfn setGetItemAtFn get-item-at-fn) get-item-at-fn))
+
 (defn set-table-data
   "Set the data for a JTable in the table model. The data is a vector of arbitrary objects, one per row. Use set-row-fn
    to define how to translate those objects into columns."
@@ -800,12 +804,14 @@
    ; End progress bar appliers
    ; Table attr appliers
    :column-names           set-column-names
+   :get-item-at-fn         set-table-get-item-at-fn
    :row-editable-fn        set-row-editable-fn
    :row-fn                 set-row-fn
    :table-data             set-table-data
    :table-selection-fn     set-table-selection-fn
    :table-render-fn        set-table-render-fn
    :table-set-value-at-fn  set-table-set-value-at-fn
+   :table-get-item-at-fn   set-table-get-item-at-fn
    ; Tree attr appliers
    ; TODO: implement this to set the scrolls on expand of JTree
    ;:scrolls-on-expand      set-scrolls-on-expand

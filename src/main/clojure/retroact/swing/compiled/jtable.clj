@@ -1,5 +1,6 @@
 (ns retroact.swing.compiled.jtable
-  (:require [clojure.tools.logging :as log]))
+  (:require [clojure.tools.logging :as log])
+  (:import (javax.swing ListSelectionModel SwingUtilities)))
 
 
 ;; --------------------------------------------------------------------------------
@@ -108,18 +109,52 @@
   :extends javax.swing.table.AbstractTableModel
   :state "state"
   :init "init-state"
+  :post-init "post-init"
   :prefix "rtable-model-"
   :methods [[getItemAt [java.lang.Integer] Object]
             [setColumnNames [clojure.lang.IPersistentVector] void]
             [setData [clojure.lang.IPersistentVector] void]
+            [setGetItemAtFn [clojure.lang.IFn] void]
             [setRowFn [clojure.lang.IFn] void]
             [setRowEditableFn [clojure.lang.IFn] void]
-            [setSetValueAtFn [clojure.lang.IFn] void]])
+            [setSelectionFn [clojure.lang.IFn] void]
+            [setSetValueAtFn [clojure.lang.IFn] void]
+            [setTableComponent [javax.swing.JTable] void]])
+
+(defn- table-model-watch
+  [this _key _ref old-value new-value]
+  (let [old-data (:data old-value)
+        new-data (:data new-value)
+        table-selection-old (get old-value :table-selection)
+        table-selection-new (get new-value :table-selection)
+        old-row-fn (:row-fn old-value)
+        new-row-fn (:row-fn new-value)
+        old-column-names (:column-names old-value)
+        new-column-names (:column-names new-value)
+        old-row-editable-fn (:row-editable-fn old-value)
+        new-row-editable-fn (:row-editable-fn new-value)
+        old-set-value-at-fn (:set-value-at-fn old-value)
+        new-set-value-at-fn (:set-value-at-fn new-value)]
+    (when (not (SwingUtilities/isEventDispatchThread))
+      (log/error (RuntimeException. "RTableModel method called off EDT.")
+                 (str "RTableModel method called off EDT. RTableModel methods should be called on EDT. "
+                      "Continuing, but behavior may not be correct.")))
+    (when (not= table-selection-old table-selection-new)
+      (let [selectionModel ^ListSelectionModel (.getSelectionModel (:table-component new-value))]
+        (.clearSelection selectionModel)
+        (doseq [row table-selection-new]
+          (.addSelectionInterval selectionModel row row))))
+    (when (not= old-data new-data)
+      (.fireTableStructureChanged this))
+    ))
 
 (defn rtable-model-init-state []
   (let [state (atom {:data   []
                      :row-fn identity})]
     [[] state]))
+
+(defn rtable-model-post-init [this & _]
+  (add-watch (.state this) :table-model-self-watch (partial table-model-watch this)))
 
 (defn rtable-model-getRowCount [this] (let [state @(.state this)] (count (:data state))))
 
@@ -139,12 +174,26 @@
       (nth column-names col)
       "")))
 
+(defn- get-item-at [state row]
+  (if-let [get-item-at-fn (:get-item-at-fn state)]
+    (get-item-at-fn (:data state) row)
+    (let [data (:data state)]
+      (nth data row))))
+
 (defn rtable-model-getColumnClass [this col]
   (let [state @(.state this)
         row-fn (:row-fn state)
-        first-row (get-in state [:data 0])
-        cell (if first-row (nth (row-fn first-row) col) "")]
-    (.getClass cell)))
+        first-item (get-item-at state 0)
+        cell (if first-item (nth (row-fn first-item) col) "")]
+    (if (nil? cell)
+      (do
+        (log/error "cell is nil in rtable-model-getColumnClass for first row and col" col)
+        (log/error "first-item:" first-item)
+        (log/error "row-fn:" row-fn)
+        (log/error "get-item-at-fn:" (:get-item-at-fn state))
+        (log/error "data:" (:data state))
+        (throw (NullPointerException. (str "cell is nil in for first row and col " col))))
+      (.getClass cell))))
 
 (defn rtable-model-isCellEditable [this row col]
   (let [state @(.state this)
@@ -157,10 +206,6 @@
         (row-editable-fn)                                   ; get editability of columns in row
         (nth col false))))                                  ; get editability of column, default to false
 
-(defn- get-item-at [state row]
-  (let [data (:data state)]
-    (nth data row)))
-
 (defn- get-value-at [state row col]
   (let [row-fn (:row-fn state)
         item (get-item-at state row)]
@@ -168,9 +213,16 @@
         (row-fn)
         (nth col))))
 
-(defn rtable-model-getItemAt [this row]
+(defn rtable-model-getItemAt
+  "Return the application state associated with the given row. Defaults to nth of :data.
+  Can be overriden by providing a :get-item-at-fn function."
+  [this row]
   (log/info "getting item at row " row)
   (get-item-at @(.state this) row))
+
+(defn rtable-model-setGetItemAtFn [this get-item-at-fn]
+  (let [state-atom (.state this)]
+    (swap! state-atom assoc :get-item-at-fn get-item-at-fn)))
 
 (defn rtable-model-getValueAt [this row col]
   (get-value-at @(.state this) row col))
@@ -188,10 +240,29 @@
     (swap! state-atom assoc :column-names column-names)
     (.fireTableStructureChanged this)))
 
+(defn- update-table-selection [{:keys [data table table-selection-fn] :as state}]
+  (if table-selection-fn
+    (assoc state :table-selection (table-selection-fn data))
+    (dissoc state :table-selection)))
+
+(defn- update-table [state]
+  (-> state
+    #_(let [data (:data state)
+          ; TODO: not correct, use the correct fn whatever it is, that get's table rows and columns.
+          table-model-fn (:table-model-fn state)]
+      ; TODO: return full modified state from let. Following may be wrong.
+      #_(assoc state :table-data (table-model-fn data)))
+    (update-table-selection)))
+
+(defn- update-data [state data]
+  (if (= (:data state) data)
+    state
+    (update-table (assoc state :data data)))
+  )
+
 (defn rtable-model-setData [this data]
-  (let [state-atom (.state this)]
-    (swap! state-atom assoc :data data)
-    (.fireTableStructureChanged this)))
+  (swap! (.state this) update-data data)
+  (.fireTableStructureChanged this))
 
 (defn rtable-model-setRowFn [this row-fn]
   (let [state-atom (.state this)]
@@ -209,3 +280,11 @@
     (if set-value-at-fn
       (swap! state-atom assoc :set-value-at-fn set-value-at-fn)
       (swap! state-atom dissoc :set-value-at-fn))))
+
+(defn rtable-model-setTableComponent [this table]
+  (let [state-atom (.state this)]
+    (swap! state-atom assoc :table-component table)))
+
+(defn rtable-model-setSelectionFn [this selection-fn]
+  (let [state-atom (.state this)]
+    (swap! state-atom assoc :table-selection-fn selection-fn)))

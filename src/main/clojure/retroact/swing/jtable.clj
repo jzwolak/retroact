@@ -1,7 +1,7 @@
 (ns retroact.swing.jtable
   (:require [clojure.tools.logging :as log])
   (:import (javax.swing JScrollPane JTable)
-           (javax.swing.table AbstractTableModel)
+           (javax.swing.table AbstractTableModel TableModel)
            (retroact.swing.compiled.jtable RTableModel)))
 
 ; Pass arguments to create-table-model that define how to access the data from the app-value. Also pass the app-value.
@@ -40,8 +40,15 @@
   [c ctx set-value-at-fn]
   (safe-table-model-set c (memfn setSetValueAtFn set-value-at-fn) set-value-at-fn))
 
+(defn set-table-get-item-at-fn
+  [c ctx table-get-item-at-fn]
+  (safe-table-model-set c (memfn setGetItemAtFn table-get-item-at-fn) table-get-item-at-fn))
+
 (defn create-jtable [{:keys [view]}]
-  (log/info "creating jtable")
-  (if (:headers view)
-    (JScrollPane. (JTable. (RTableModel.)))
-    (JTable. (RTableModel.))))
+  (let [table-model (RTableModel.)
+        table (JTable. ^TableModel table-model)]
+    (.setTableComponent table-model table)
+    (if (:headers view)
+      (JScrollPane. table)
+      table)))
+

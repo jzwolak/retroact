@@ -31,10 +31,8 @@
     (let [selected-rows (.getSelectedRows component)]
       (log/info "Selection changed. Selected rows:" (vec selected-rows))
       (if (empty? selected-rows)
-        (swap! app-ref assoc-in [:state :selected-row-interval] nil)
-        (let [min-row (apply min selected-rows)
-              max-row (apply max selected-rows)]
-          (swap! app-ref assoc-in [:state :selected-row-interval] [min-row max-row]))))))
+        (swap! app-ref dissoc :selection)
+        (swap! app-ref assoc :selection (vec selected-rows))))))
 
 ;; Handle button clicks to select specific rows
 (defn select-first-person [app-ref _]
@@ -104,12 +102,10 @@
                      {:class         :scroll-pane
                       :constraints   BorderLayout/CENTER
                       :viewport-view {:class                  :table
-                                      :table-data             [sample-people (:selection app-value)]
-                                      :get-item-at-fn         get-item-at-fn
+                                      :table-data             sample-people
                                       :row-fn                 person-row-fn
                                       :column-names           ["Name" "Age" "City"]
-                                      :selection-fn           selection-fn
-                                      ;:row-selection-interval selected-interval
+                                      :selection              (:selection app-value)
                                       :on-selection-change    handle-selection-change}}]}))})
 
 (defn main []

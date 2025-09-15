@@ -117,6 +117,7 @@
             [setGetItemAtFn [clojure.lang.IFn] void]
             [setRowFn [clojure.lang.IFn] void]
             [setRowEditableFn [clojure.lang.IFn] void]
+            [setSelection [clojure.lang.IPersistentVector] void]
             [setSelectionFn [clojure.lang.IFn] void]
             [setSetValueAtFn [clojure.lang.IFn] void]
             [setTableComponent [javax.swing.JTable] void]])
@@ -126,27 +127,21 @@
   (let [old-data (:data old-value)
         new-data (:data new-value)
         table-selection-old (get old-value :table-selection)
-        table-selection-new (get new-value :table-selection)
-        old-row-fn (:row-fn old-value)
-        new-row-fn (:row-fn new-value)
-        old-column-names (:column-names old-value)
-        new-column-names (:column-names new-value)
-        old-row-editable-fn (:row-editable-fn old-value)
-        new-row-editable-fn (:row-editable-fn new-value)
-        old-set-value-at-fn (:set-value-at-fn old-value)
-        new-set-value-at-fn (:set-value-at-fn new-value)]
+        table-selection-new (get new-value :table-selection)]
     (when (not (SwingUtilities/isEventDispatchThread))
       (log/error (RuntimeException. "RTableModel method called off EDT.")
                  (str "RTableModel method called off EDT. RTableModel methods should be called on EDT. "
                       "Continuing, but behavior may not be correct.")))
     (when (not= table-selection-old table-selection-new)
       (let [selectionModel ^ListSelectionModel (.getSelectionModel (:table-component new-value))]
-        (.clearSelection selectionModel)
+        #_(.clearSelection selectionModel)
         (doseq [row table-selection-new]
-          (.addSelectionInterval selectionModel row row))))
-    (when (not= old-data new-data)
-      (.fireTableStructureChanged this))
-    ))
+          (when (not (.isSelectedIndex selectionModel row))
+            (.addSelectionInterval selectionModel row row)))))
+    ; The following may not be a good idea. Or maybe it needs to happen only when table data has changed
+    ; not always.
+    #_(when (not= old-data new-data)
+      (.fireTableStructureChanged this))))
 
 (defn rtable-model-init-state []
   (let [state (atom {:data   []
@@ -284,6 +279,10 @@
 (defn rtable-model-setTableComponent [this table]
   (let [state-atom (.state this)]
     (swap! state-atom assoc :table-component table)))
+
+(defn rtable-model-setSelection [this table-selection]
+  (let [state-atom (.state this)]
+    (swap! state-atom assoc :table-selection table-selection)))
 
 (defn rtable-model-setSelectionFn [this selection-fn]
   (let [state-atom (.state this)]

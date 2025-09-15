@@ -10,7 +10,8 @@
             [retroact.swing :as swing]
             [retroact.toolkit :as tk])
   (:import (clojure.lang Agent Atom Ref)
-           (java.lang.ref WeakReference)))
+           (java.lang.ref WeakReference)
+           (javax.swing JTable)))
 
 ; TODO: add ability to register exception handler. Wrap all calls to component-did-mount and component-did-update with
 ; try-catch and call registered exception handlers. Wrap outer loop of retroact main loop in try catch to add a fail

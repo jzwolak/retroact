@@ -471,6 +471,9 @@
     (let [model (.getModel c)]
       (.setData model (vec data)))))
 
+(defn set-table-selection [c ctx table-selection]
+  (safe-table-model-set c (memfn setSelection table-selection) table-selection))
+
 (defn set-row-editable-fn
   "Similar to set-row-fn but returns a vec of true or false representing whether each column in the row is editable. A
   value of true means the column for this row is editable. The row-editable-fn takes a single arg, which is the nth
@@ -804,11 +807,12 @@
    ; End progress bar appliers
    ; Table attr appliers
    :column-names           set-column-names
-   :get-item-at-fn         set-table-get-item-at-fn
+   ;:get-item-at-fn         set-table-get-item-at-fn
    :row-editable-fn        set-row-editable-fn
    :row-fn                 set-row-fn
    :table-data             set-table-data
-   :table-selection-fn     set-table-selection-fn
+   :selection              set-table-selection
+   ;:table-selection-fn     set-table-selection-fn
    :table-render-fn        set-table-render-fn
    :table-set-value-at-fn  set-table-set-value-at-fn
    :table-get-item-at-fn   set-table-get-item-at-fn

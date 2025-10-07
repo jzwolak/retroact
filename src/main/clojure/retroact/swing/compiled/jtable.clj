@@ -157,10 +157,15 @@
   (let [state @(.state this)
         data (:data state)
         first-row (first data)
-        row-fn (:row-fn state)]
-    (if first-row
-      (count (row-fn first-row))
-      0)))
+        row-fn (:row-fn state)
+        column-names (:column-names state)]
+    (cond
+      ; Prefer explicit column headers when provided.
+      (some? column-names) (count column-names)
+      ; Otherwise infer from the first row via row-fn.
+      first-row (count (row-fn first-row))
+      ; No data and no headers => zero columns.
+      :else 0)))
 
 (defn rtable-model-getColumnName [this col]
   (let [state @(.state this)
@@ -173,21 +178,15 @@
   (if-let [get-item-at-fn (:get-item-at-fn state)]
     (get-item-at-fn (:data state) row)
     (let [data (:data state)]
-      (nth data row))))
+      (get data row))))
 
 (defn rtable-model-getColumnClass [this col]
   (let [state @(.state this)
         row-fn (:row-fn state)
         first-item (get-item-at state 0)
-        cell (if first-item (nth (row-fn first-item) col) "")]
+        cell (if first-item (get (row-fn first-item) col) "")]
     (if (nil? cell)
-      (do
-        (log/error "cell is nil in rtable-model-getColumnClass for first row and col" col)
-        (log/error "first-item:" first-item)
-        (log/error "row-fn:" row-fn)
-        (log/error "get-item-at-fn:" (:get-item-at-fn state))
-        (log/error "data:" (:data state))
-        (throw (NullPointerException. (str "cell is nil in for first row and col " col))))
+      Object
       (.getClass cell))))
 
 (defn rtable-model-isCellEditable [this row col]
@@ -206,7 +205,7 @@
         item (get-item-at state row)]
     (-> item
         (row-fn)
-        (nth col))))
+        (get col))))
 
 (defn rtable-model-getItemAt
   "Return the application state associated with the given row. Defaults to nth of :data.

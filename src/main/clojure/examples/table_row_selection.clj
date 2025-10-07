@@ -65,7 +65,8 @@
      (let [selected-interval (get-in app-value [:state :selected-row-interval])
            selected-people (when selected-interval
                              (let [[start end] selected-interval]
-                               (subvec sample-people start (inc end))))]
+                               (subvec sample-people start (inc end))))
+           sample-people (get-in app-value [:state :sample-people])]
        {:class      :frame
         :title      "Table Row Selection Example"
         :on-close   :dispose
@@ -105,9 +106,11 @@
                                       :table-data             sample-people
                                       :row-fn                 person-row-fn
                                       :column-names           ["Name" "Age" "City"]
+                                      :table-columns {0 {:max-width 120}}
                                       :selection              (:selection app-value)
                                       :on-selection-change    handle-selection-change}}]}))})
 
 (defn main []
   (let [app-ref (init-app (table-row-selection-app))]
-    (log/info "Table row selection example started")))
+    (log/info "Table row selection example started")
+    (swap! app-ref assoc-in [:state :sample-people] sample-people)))

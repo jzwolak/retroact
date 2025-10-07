@@ -11,8 +11,8 @@
             [retroact.swing.jlist :refer [create-jlist]]
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
-            [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
-                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn]]
+           [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
+                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn set-table-columns set-table-auto-resize-mode]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
@@ -817,68 +817,72 @@
    :table-render-fn        set-table-render-fn
    :table-set-value-at-fn  set-table-set-value-at-fn
    :table-get-item-at-fn   set-table-get-item-at-fn
+   :table-auto-resize-mode set-table-auto-resize-mode
+   :table-columns {:deps [:table-data :row-fn :column-names]
+                   :update-on-deps-changed true
+                   :fn set-table-columns}
    ; Tree attr appliers
    ; TODO: implement this to set the scrolls on expand of JTree
    ;:scrolls-on-expand      set-scrolls-on-expand
-   :tree-render-fn         set-tree-render-fn
-   :tree-model-fn          set-tree-model-fn
-   :tree-selection-fn      set-tree-selection-fn
-   :tree-scroll-path-fn    set-tree-scroll-path-fn
-   :tree-data              set-tree-data
-   :toggle-click-count     set-tree-toggle-click-count
+   :tree-render-fn set-tree-render-fn
+   :tree-model-fn set-tree-model-fn
+   :tree-selection-fn set-tree-selection-fn
+   :tree-scroll-path-fn set-tree-scroll-path-fn
+   :tree-data set-tree-data
+   :toggle-click-count set-tree-toggle-click-count
    ; End tree attr appliers
    ; Scroll pane appliers
-   :horizontal-scroll-bar  set-horizontal-scroll-bar
+   :horizontal-scroll-bar set-horizontal-scroll-bar
    :horizontal-scroll-bar-policy set-horizontal-scroll-bar-policy
-   :on-vertical-scroll     on-vertical-scroll
-   :on-horizontal-scroll   on-horizontal-scroll
-   :vertical-scroll-bar    set-vertical-scroll-bar
+   :on-vertical-scroll on-vertical-scroll
+   :on-horizontal-scroll on-horizontal-scroll
+   :vertical-scroll-bar set-vertical-scroll-bar
    :vertical-scroll-bar-policy set-vertical-scroll-bar-policy
-   :viewport-border        borders/set-viewport-border
-   :viewport-view          {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
-                            :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
+   :viewport-border borders/set-viewport-border
+   :viewport-view {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
+                   :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}
    ; End scroll pane appliers
 
    ; Event attrs. :on-*
-   :on-action              (fn on-action [c ctx action-handler]
-                             (listeners/remove-listener c ActionListener RetroactSwingOnAction)
-                             (when action-handler
-                               (.addActionListener c (listeners/proxy-action-listener
-                                                       (fn action-handler-clojure [action-event]
-                                                         (action-handler (:app-ref ctx) action-event))))))
-   :on-change              on-change
-   :on-component-resize    on-component-resize
-   :on-component-hidden    on-component-hidden
-   :on-component-shown     on-component-shown
-   :on-focus-gained        on-focus-gained
-   :on-focus-lost          on-focus-lost
-   :on-key-pressed         on-key-pressed
-   :on-property-change     on-property-change
-   :on-selection-change    on-selection-change
-   :on-text-change         on-text-change
-   :on-set-value-at        on-set-value-at
+   :on-action (fn on-action [c ctx action-handler]
+                (listeners/remove-listener c ActionListener RetroactSwingOnAction)
+                (when action-handler
+                  (.addActionListener c (listeners/proxy-action-listener
+                                          (fn action-handler-clojure [action-event]
+                                            (action-handler (:app-ref ctx) action-event))))))
+   :on-change on-change
+   :on-component-resize on-component-resize
+   :on-component-hidden on-component-hidden
+   :on-component-shown on-component-shown
+   :on-focus-gained on-focus-gained
+   :on-focus-lost on-focus-lost
+   :on-key-pressed on-key-pressed
+   :on-property-change on-property-change
+   :on-selection-change on-selection-change
+   :on-text-change on-text-change
+   :on-set-value-at on-set-value-at
    ; Mouse listeners
-   :on-click               on-click
-   :on-mouse-wheel-moved   on-mouse-wheel-moved
+   :on-click on-click
+   :on-mouse-wheel-moved on-mouse-wheel-moved
    ; Drag and Drop
    ; :on-drag, :on-drag-over, and :on-drop may be used together to implement drag and drop, however, another way exists.
    ; See :drag-enabled
-   :on-drag                on-drag
-   :on-drag-over           on-drag-over
-   :on-drop                on-drop
+   :on-drag on-drag
+   :on-drag-over on-drag-over
+   :on-drop on-drop
    ; In some cases, this is the _only_ thing necessary to enable drag and drop. Also setting the :transfer-handler will
    ; expand the abilities of this approach.
-   :drag-enabled           set-drag-enabled
-   :transfer-handler       set-transfer-handler
+   :drag-enabled set-drag-enabled
+   :transfer-handler set-transfer-handler
    ; Children and Component appliers (not all are here, but if they don't fit in another section, they're here)
    ; Popup-menu
-   :popup-menu             {:get (fn get-popup-menu [c ctx] (.getComponentPopupMenu c))
-                            :set (fn set-popup-menu [c ctx popup-menu] (.setComponentPopupMenu c popup-menu))}
+   :popup-menu {:get (fn get-popup-menu [c ctx] (.getComponentPopupMenu c))
+                :set (fn set-popup-menu [c ctx popup-menu] (.setComponentPopupMenu c popup-menu))}
    ; Menus
-   :menu-bar               {:get-existing-children mb/get-existing-children
-                            :add-new-child-at      mb/add-new-child-at
-                            :remove-child-at       mb/remove-child-at
-                            :get-child-at          mb/get-child-at}
+   :menu-bar {:get-existing-children mb/get-existing-children
+              :add-new-child-at      mb/add-new-child-at
+              :remove-child-at       mb/remove-child-at
+              :get-child-at          mb/get-child-at}
    ; TODO: refactor add-contents to a independent defn and check component type to be sure it's a valid container.
    ;  Perhaps pass in the map in addition to the component so that we don't have to use `instanceof`?
    ; TODO:
@@ -886,11 +890,11 @@
    ; - specify fn for adding new child component at specified index
    ; - no need to specify how to update a child component... that is just as if it was a root component.
    ; - no need to specify how to create a child component... that is also as if it was a root component.
-   :contents               {:deps                  [:layout]
-                            :get-existing-children get-existing-children
-                            :add-new-child-at      add-new-child-at
-                            :remove-child-at       remove-child-at
-                            :get-child-at          get-child-at}
+   :contents {:deps                  [:layout]
+              :get-existing-children get-existing-children
+              :add-new-child-at      add-new-child-at
+              :remove-child-at       remove-child-at
+              :get-child-at          get-child-at}
    })
 
 (def toolkit-config

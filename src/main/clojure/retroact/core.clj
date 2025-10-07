@@ -108,6 +108,23 @@
 (defn- pad [col length]
   (vec (take length (concat col (repeat nil)))))
 
+(defn- should-apply-attr?
+  "Returns true if the attr or any dependencies have changed. Recurs over dependencies and their dependencies.
+  Does the same check between old-view and new-view for each dependency."
+  [attr-appliers old-view new-view attr]
+  (loop [attrs [attr] result false]
+    (if (or (empty? attrs) result)
+      (do
+        (log/info "should-apply-attr? attr =" attr "result =" result)
+        result)
+      (let [attr (first attrs)
+            attr-applier (get attr-appliers attr)]
+        (recur (into (rest attrs)
+                     (when (:update-on-deps-changed attr-applier)
+                       (:deps attr-applier)))
+               (or (not= (get old-view attr) (get new-view attr))
+                   (not (= (contains? old-view attr) (contains? new-view attr)))))))))
+
 (defn- should-build-sub-comp? [old-sub-comp new-sub-comp]
   (or
     (and (nil? old-sub-comp) (not (nil? new-sub-comp)))     ; subcomponent is new
@@ -323,8 +340,7 @@
           (children-applier? attr-applier) (apply-children-applier attr-applier onscreen-component ctx attr old-view new-view)
           (component-applier? attr-applier) (apply-component-applier attr-applier onscreen-component ctx attr old-view new-view)
           ; Assume attr-applier is a fn and call it on the component. But only when attribute val changed.
-          :else (when (or (not (= (get old-view attr) (get new-view attr)))
-                          (not (= (contains? old-view attr) (contains? new-view attr))))
+          :else (when (should-apply-attr? attr-appliers old-view new-view attr)
                   (tk/run-on-toolkit-thread ctx (get-applier-fn attr-applier) onscreen-component
                                             (assoc ctx :attr attr)
                                             (get new-view attr))))))

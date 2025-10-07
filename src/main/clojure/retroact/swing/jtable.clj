@@ -22,6 +22,12 @@
     (instance? JScrollPane table) (safe-table-model-set (-> table (.getViewport) (.getView)) f attribute)
     :else (log/error "skipping fn on table because component does not appear to be a table: " table)))
 
+(defn safe-table-set [table f attribute]
+  (cond
+    (instance? JTable table) (f table attribute)
+    (instance? JScrollPane table) (safe-table-set (-> table (.getViewport) (.getView)) f attribute)
+    :else (log/error "skipping fn on table because component does not appear to be a table: " table)))
+
 (defn set-table-selection-fn
   "Set the selection function for a JTable. This function will be called when table selection changes.
   Analogous to :tree-selection-fn for JTree."
@@ -44,11 +50,45 @@
   [c ctx table-get-item-at-fn]
   (safe-table-model-set c (memfn setGetItemAtFn table-get-item-at-fn) table-get-item-at-fn))
 
+(defn set-table-auto-resize-mode
+  "Set JTable auto-resize mode. Accepts JTable/AUTO_RESIZE_ constants."
+  [c ctx mode]
+  (safe-table-set c (fn [^JTable t m]
+                      (when-let [val m]
+                        (.setAutoResizeMode t val)))
+                  mode))
+
+; TODO: this doesn't work because it is first run before the table column is created
+(defn- set-table-columns- [table columns]
+  (let [column-model (.getColumnModel table)
+        cm-count (.getColumnCount column-model)
+        model-count (.getColumnCount (.getModel table))]
+    ; Ensure columns are created from the model when needed (e.g., empty data but headers present).
+    (when (< cm-count model-count)
+      (.createDefaultColumnsFromModel table))
+    (doseq [[n column] columns]
+      (let [column-model (.getColumnModel table)]
+        (when (and (>= n 0) (< n (.getColumnCount column-model)))
+          (let [table-column (.getColumn column-model n)]
+            (when-let [preferred-width (cond
+                                         (map? column) (get column :preferred-width)
+                                         (number? column) column
+                                         :else nil)]
+              (.setPreferredWidth table-column preferred-width))
+            (when-let [max-width (get column :max-width)]
+              (.setMaxWidth table-column max-width))
+            (when-let [min-width (get column :min-width)]
+              (.setMinWidth table-column min-width))))))))
+
+(defn set-table-columns
+  [c ctx columns]
+  (safe-table-set c set-table-columns- columns))
+
 (defn create-jtable [{:keys [view]}]
   (let [table-model (RTableModel.)
         table (JTable. ^TableModel table-model)]
     (.setTableComponent table-model table)
+    ; TODO: this is a strange decision. Shouldn't it always be in a JScrollPane? Or never? Or perhaps test to see if it is already in one.
     (if (:headers view)
       (JScrollPane. table)
       table)))
-

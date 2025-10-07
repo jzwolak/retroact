@@ -1,7 +1,7 @@
  (ns retroact.jtable-test
    (:require [clojure.test :refer :all]
              [retroact.swing.jtable :as rjt])
-   (:import (javax.swing JTable SwingUtilities)
+   (:import (javax.swing JTable SwingUtilities SortOrder)
             (javax.swing.table TableModel)
             (retroact.swing.compiled.jtable RTableModel)))
 
@@ -28,3 +28,20 @@
            (let [cm (.getColumnModel table)]
              (is (= 120 (.getPreferredWidth (.getColumn cm 0))))
              (is (= 60 (.getPreferredWidth (.getColumn cm 2))))))))))
+
+ (deftest table-sort-ascending-by-column
+   (let [model (RTableModel.)
+         table-holder (atom nil)]
+     (SwingUtilities/invokeAndWait
+       (fn []
+         ;; Model with one column, using identity row-fn so rows are vectors
+         (.setColumnNames model ["Num"]) ; 1 column
+         (.setRowFn model identity)
+         (.setData model [[2] [1] [3]])
+         (let [^JTable table (JTable. ^TableModel model)]
+           (reset! table-holder table)
+           ;; Sort ascending by column 0
+           (rjt/set-table-sort table nil [0 SortOrder/ASCENDING])
+           (is (= 1 (.getValueAt table 0 0)))
+           (is (= 2 (.getValueAt table 1 0)))
+           (is (= 3 (.getValueAt table 2 0))))))))

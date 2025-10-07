@@ -1,7 +1,7 @@
 (ns retroact.swing.jtable
   (:require [clojure.tools.logging :as log])
-  (:import (javax.swing JScrollPane JTable)
-           (javax.swing.table AbstractTableModel TableModel)
+  (:import (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder)
+           (javax.swing.table AbstractTableModel TableModel TableRowSorter)
            (retroact.swing.compiled.jtable RTableModel)))
 
 ; Pass arguments to create-table-model that define how to access the data from the app-value. Also pass the app-value.
@@ -57,6 +57,63 @@
                       (when-let [val m]
                         (.setAutoResizeMode t val)))
                   mode))
+
+(defn- ^SortOrder normalize-sort-order [order]
+  (cond
+    (instance? SortOrder order) order
+    (keyword? order)
+    (case order
+      :asc SortOrder/ASCENDING
+      :ascending SortOrder/ASCENDING
+      :desc SortOrder/DESCENDING
+      :descending SortOrder/DESCENDING
+      :unsorted SortOrder/UNSORTED
+      SortOrder/UNSORTED)
+    :else SortOrder/UNSORTED))
+
+(defn- normalize-sort-spec [spec]
+  (cond
+    (nil? spec) nil
+    ; Single pair [col order]
+    (and (vector? spec)
+         (= 2 (count spec))
+         (number? (first spec)))
+    [spec]
+    ; Sequence of pairs
+    (sequential? spec) (vec spec)
+    :else nil))
+
+(defn set-table-sort
+  "Configure sorting on a JTable using TableRowSorter.
+  Accepts either a single pair [col order] or a sequence of such pairs.
+  `order` may be a javax.swing.SortOrder or a keyword one of
+  :asc/:ascending, :desc/:descending, or :unsorted.
+
+  Examples:
+    {:table-sort [0 SortOrder/ASCENDING]}
+    {:table-sort [[2 :desc] [0 :asc]]} ;; secondary sort
+  Passing nil clears sorting."
+  [c ctx sort-spec]
+  (safe-table-set
+    c
+    (fn [^JTable t spec]
+      (let [pairs (normalize-sort-spec spec)]
+        (if (nil? pairs)
+          (.setRowSorter t nil)
+          (let [^TableModel model (.getModel t)
+                existing (.getRowSorter t)
+                ^TableRowSorter sorter (if (instance? TableRowSorter existing)
+                                         existing
+                                         (let [s (TableRowSorter. model)]
+                                           (.setRowSorter t s)
+                                           s))
+                sort-keys (mapv (fn [[col order]]
+                                   (RowSorter$SortKey. (int col) (normalize-sort-order order)))
+                                 pairs)]
+            (.setSortKeys sorter sort-keys)
+            ; setSortKeys usually triggers a sort; call sort to be explicit
+            (.sort sorter)))))
+    sort-spec))
 
 ; TODO: this doesn't work because it is first run before the table column is created
 (defn- set-table-columns- [table columns]

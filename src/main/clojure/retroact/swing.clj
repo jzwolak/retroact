@@ -12,7 +12,8 @@
             [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
                                           set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
            [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
-                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn set-table-columns set-table-auto-resize-mode]]
+                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn
+                                          set-table-columns set-table-auto-resize-mode set-table-sort]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
@@ -818,6 +819,7 @@
    :table-set-value-at-fn  set-table-set-value-at-fn
    :table-get-item-at-fn   set-table-get-item-at-fn
    :table-auto-resize-mode set-table-auto-resize-mode
+   :table-sort             set-table-sort
    :table-columns {:deps [:table-data :row-fn :column-names]
                    :update-on-deps-changed true
                    :fn set-table-columns}

@@ -25,6 +25,7 @@
       [:dashed 3] (BorderFactory/createDashedBorder (create-color arg1) arg2 arg3)
       [:dashed 5] (BorderFactory/createDashedBorder (create-color arg1) arg2 arg3 arg4 arg5)
       [:empty 0] (BorderFactory/createEmptyBorder)
+      [:empty 1] (BorderFactory/createEmptyBorder arg1 arg1 arg1 arg1)
       [:empty 4] (BorderFactory/createEmptyBorder arg1 arg2 arg3 arg4)
       [:etched 0] (BorderFactory/createEtchedBorder)
       [:etched 1] (BorderFactory/createEtchedBorder arg1)

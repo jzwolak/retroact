@@ -235,14 +235,21 @@
 (defn- set-some-width [c width getter-fn setter-fn]
   (let [dimension (getter-fn)
         height (.getHeight dimension)]
-    (setter-fn (Dimension. width height)))
+    (set-property
+      c width
+      #(.getWidth %)
+      #(setter-fn (Dimension. %2 height)))
+    #_(setter-fn (Dimension. width height)))
   (when (instance? Window c)
     (.pack c)))
 
 (defn- set-some-height [c height getter-fn setter-fn]
   (let [dimension (getter-fn)
         width (.getWidth dimension)]
-    (setter-fn (Dimension. width height)))
+    (set-property
+      c height
+      #(.getHeight %)
+      #(setter-fn (Dimension. width %2))))
   (when (instance? Window c)
     (.pack c)))
 

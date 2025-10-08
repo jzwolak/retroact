@@ -1,6 +1,7 @@
 (ns retroact.swing.jtable
   (:require [clojure.tools.logging :as log])
-  (:import (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder)
+  (:import (java.awt Dimension)
+           (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder)
            (javax.swing.table AbstractTableModel TableModel TableRowSorter)
            (retroact.swing.compiled.jtable RTableModel)))
 
@@ -57,6 +58,30 @@
                       (when-let [val m]
                         (.setAutoResizeMode t val)))
                   mode))
+
+(defn set-table-intercell-spacing
+  "Set JTable intercell spacing.
+  Accepts one or two integers:
+  - single integer N: applies to both horizontal and vertical spacing
+  - two integers [h v]: horizontal then vertical spacing"
+  [c ctx spacing]
+  (safe-table-set
+    c
+    (fn [^JTable t s]
+      (when s
+        (let [d (cond
+                  (number? s) (Dimension. (int s) (int s))
+                  (sequential? s)
+                  (let [cnt (count s)]
+                    (cond
+                      (= 1 cnt) (let [n (first s)] (Dimension. (int n) (int n)))
+                      (>= cnt 2) (let [[h v] s] (Dimension. (int h) (int v)))
+                      :else nil))
+                  :else nil)]
+          (if d
+            (.setIntercellSpacing t d)
+            (log/warn "Ignoring :table-intercell-spacing invalid value" s)))))
+    spacing))
 
 (defn- ^SortOrder normalize-sort-order [order]
   (cond

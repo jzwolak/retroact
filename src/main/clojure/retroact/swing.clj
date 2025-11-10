@@ -14,7 +14,8 @@
            [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
                                           set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn
                                           set-table-columns set-table-auto-resize-mode set-table-sort
-                                          set-table-intercell-spacing]]
+                                          set-table-intercell-spacing set-row-selection-allowed set-column-selection-allowed
+                                          set-table-header get-table-header]]
             [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
@@ -28,6 +29,7 @@
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
+           (javax.swing.table JTableHeader)
            (net.miginfocom.swing MigLayout)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)
            (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
@@ -189,7 +191,8 @@
       )))
 
 (defn set-editable [c ctx editable]
-  (set-property-on-root-pane c editable #(.isEditable %) #(.setEditable %1 %2)))
+  (let [c (if (instance? JScrollPane c) (.getView (.getViewport c)) c)]
+    (set-property-on-root-pane c editable #(.isEditable %) #(.setEditable %1 %2))))
 
 (defn- set-enabled [c ctx enabled]
   (set-property-on-root-pane c enabled #(.isEnabled %) (fn [c e] (.setEnabled c ^boolean (boolean e)))))
@@ -400,6 +403,7 @@
    :split-pane                 JSplitPane
    :tabbed-pane                JTabbedPane
    :table                      create-jtable
+   :table-header               JTableHeader
    :text-area                  create/create-jtext-area
    :text-field                 JTextField
    :text-pane                  JTextPane
@@ -822,15 +826,19 @@
    :row-fn                 set-row-fn
    :table-data             set-table-data
    :selection              set-table-selection
+   :table-header {:set set-table-header
+                  :get get-table-header}
    ;:table-selection-fn     set-table-selection-fn
-   :table-render-fn        set-table-render-fn
-   :table-set-value-at-fn  set-table-set-value-at-fn
-   :table-get-item-at-fn   set-table-get-item-at-fn
+   :table-render-fn set-table-render-fn
+   :table-set-value-at-fn set-table-set-value-at-fn
+   :table-get-item-at-fn set-table-get-item-at-fn
    :table-auto-resize-mode set-table-auto-resize-mode
    :table-intercell-spacing set-table-intercell-spacing
-   :table-sort {:deps [:table-data :row-fn :column-names]
+   :row-selection-allowed set-row-selection-allowed
+   :column-selection-allowed set-column-selection-allowed
+   :table-sort {:deps                   [:table-data :row-fn :column-names]
                 :update-on-deps-changed true
-                :fn   set-table-sort}
+                :fn                     set-table-sort}
    :table-columns {:deps                   [:table-data :row-fn :column-names]
                    :update-on-deps-changed true
                    :fn                     set-table-columns}

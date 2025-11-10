@@ -114,9 +114,7 @@
   [attr-appliers old-view new-view attr]
   (loop [attrs [attr] result false]
     (if (or (empty? attrs) result)
-      (do
-        (log/info "should-apply-attr? attr =" attr "result =" result)
-        result)
+      result
       (let [attr (first attrs)
             attr-applier (get attr-appliers attr)]
         (recur (into (rest attrs)
@@ -206,20 +204,16 @@
       #_(log/info "child index" index "| new-child =" new-child "log msg2")
       (cond
         (nil? old-child) (do
-                           (log/info "adding child at" index "for component" component)
                            (tk/run-on-toolkit-thread ctx add-new-child-at component (build-ui ctx new-child) new-child index))
         (not= (:class old-child) (:class new-child)) (do
-                                                       (log/info "replacing child at" index "for component" component)
                                                        (replace-child-at ctx remove-child-at add-new-child-at component new-child index))
         (and old-child new-child) (do
-                                    (log/info "updating child at" index "for component" component)
                                     (apply-attributes
                                         (assoc ctx
                                           :onscreen-component (tk/run-on-toolkit-thread-with-result ctx get-child-at component index)
                                           :old-view old-child :new-view new-child)))))
     (when (> (count old-children) (count new-children))
       (doseq [index (range (dec (count old-children)) (dec (count new-children)) -1)]
-        (log/info "removing child at" index "for" (:class new-view))
         (tk/run-on-toolkit-thread ctx remove-child-at component index)))
     (tk/redraw-onscreen-component ctx component)))
 
@@ -422,7 +416,6 @@
 
 (defn- run-on-app-ref-chan
   [app-ref cmd]
-  (log/info "run-on-app-ref-chan enqueueing cmd for app-ref" (System/identityHashCode app-ref))
   (go (>! (get-in (meta app-ref) [:retroact :update-view-chan]) cmd)))
 
 (defn- run-cmd
@@ -444,7 +437,6 @@
   ; Update view when state changed
   (when (not= old-value new-value)
     (call-side-effects app-ref old-value new-value)
-    (log/info "app-watch calling trigger-update-view")
     (trigger-update-view app-ref new-value)))
 
 ; for debugging
@@ -500,10 +492,7 @@
 (defn- update-onscreen-component [{:keys [onscreen-component old-view new-view] :as ctx}]
   (let [reusable (onscreen-component-reusable? ctx onscreen-component old-view new-view)
         onscreen-component (if reusable onscreen-component (instantiate-class ctx new-view))
-        ;_ (log/info "update-onscreen-component: old-view (before) =" old-view)
         old-view (tk/get-view ctx onscreen-component)
-        ;_ (log/info "update-onscreen-component: old-view (after)  =" old-view)
-        ;_ (log/info "update-onscreen-component: onscreen-component =" onscreen-component)
         ctx (if reusable ctx (assoc ctx :old-view old-view))]
     (apply-attributes (assoc ctx :onscreen-component onscreen-component))
     onscreen-component))
@@ -573,7 +562,6 @@
   ; component objects matching the onscreen-components. So we use it.
   (reduce-kv
     (fn render-onscreen-comp [m comp-id comp]
-      (log/info "updating component with id" comp-id)
       (assoc m comp-id (update-component ctx comp)))
     ; This is the only reference to components in app. All other references to components is the local components to
     ; the retroact-main-loop. It's here because there may be multiple apps running and the main loop services them all.
@@ -591,9 +579,7 @@
 
 (defn- register-component-with-id
   [onscreen-component ctx id]
-  (log/info "registering component with id" id onscreen-component)
-  (swap! retroact-state clear-weak-refs-and-add-id->comp id onscreen-component)
-  (log/info "retroact-state =" (:id->comp @retroact-state)))
+  (swap! retroact-state clear-weak-refs-and-add-id->comp id onscreen-component))
 
 (def retroact-attr-appliers
   {:id register-component-with-id})
@@ -601,13 +587,9 @@
 (defn get-comp
   "Return onscreen component matching id."
   [id]
-  (log/info "getting comp with id" id)
   (let [weak-ref (get-in @retroact-state [:id->comp id])]
     (if weak-ref
-      (do
-        (log/info "got weak-ref:" weak-ref)
-        (log/info "got comp:" (.get weak-ref))
-        (.get weak-ref))
+      (.get weak-ref)
       (do
         (log/info "weak-ref is nil? " (nil? weak-ref)))
       )))
@@ -633,7 +615,6 @@
                (if touch-counter (inc' touch-counter) 0))))
 
 (defn- rerender-all-impl []
-  (log/info "rerendering all")
   (let [app-ref->components (:app-ref->components @retroact-state)
         app-refs (keys app-ref->components)]
     (doseq [[app-ref onscreen-components] app-ref->components]
@@ -656,7 +637,6 @@
   ; pure fns are supposed to be used to render view from state).
   (let [                                                    ;[val port] (alts!! chans :priority true)
         cmd-name (first val)]
-    (log/info "retroact-main-loop executing cmd" cmd-name)
     (condp = cmd-name
       ; TODO: the following eventually makes calls to Swing code which is not thread safe. This thread is not the EDT.
       ; Therefore, do something to make sure those calls get to the EDT and make sure it's done in a way independent
@@ -707,7 +687,6 @@
                        (swap! retroact-state assoc-in [:app-ref->components app-ref] next-components)
                        chans)
       :remove-component (let [{:keys [comp-id app-ref]} (second val)]
-                          (log/info "removing component" comp-id)
                           (swap! retroact-state update-in [:app-ref->components app-ref] dissoc comp-id)
                           ; TODO: remove the update-view-chan from chans? no. Maybe if all components are dissoc, but still, careful
                           chans)
@@ -726,8 +705,6 @@
   (log/trace "STARTING RETROACT MAIN LOOP")
   (loop [chans [retroact-cmd-chan] iter-num 0]
     (let [[val port] (alts!! chans :priority true)
-
-          _ (log/info "record retroact iteration start time for iteration" iter-num)
           _ (swap! retroact-state assoc
                    :main-loop-single-iteration-running true
                    :main-loop-single-iteration-start-time (System/currentTimeMillis))
@@ -746,7 +723,6 @@
       (swap! retroact-state assoc
              :main-loop-single-iteration-running false
              :main-loop-single-iteration-start-time nil)
-      (log/info "record retroact iteration end for iteration" iter-num)
       (cond
         (= :shutdown new-chans) (do
                                   (swap! retroact-state assoc :shutting-down true)

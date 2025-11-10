@@ -1,5 +1,6 @@
 (ns retroact.swing.jtable
-  (:require [clojure.tools.logging :as log])
+  (:require [clojure.tools.logging :as log]
+            [retroact.swing.util :as util])
   (:import (java.awt Dimension)
            (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder)
            (javax.swing.table AbstractTableModel TableModel TableRowSorter)
@@ -82,6 +83,28 @@
             (.setIntercellSpacing t d)
             (log/warn "Ignoring :table-intercell-spacing invalid value" s)))))
     spacing))
+
+(defn set-row-selection-allowed [c ctx row-selection-allowed]
+  (safe-table-set c (memfn setRowSelectionAllowed row-selection-allowed) row-selection-allowed))
+
+(defn set-column-selection-allowed [c ctx column-selection-allowed]
+  (safe-table-set c (memfn setColumnSelectionAllowed column-selection-allowed) column-selection-allowed))
+
+(defn set-table-header
+  "This is a \"component\" setter. It takes an actual JTableHeader."
+  [c ctx table-header]
+  (safe-table-set
+    c
+    (fn [t h]
+      (let [sp (util/get-parent-scroll-pane t)]
+        (.setColumnModel h (.getColumnModel t))
+        (.setTableHeader t h)
+        #_(.setColumnHeaderView sp h)))
+    table-header))
+
+(defn get-table-header [c ctx]
+  (let [table (if (instance? JScrollPane c) (.getView (.getViewport c)) c)]
+    (.getTableHeader table)))
 
 (defn- ^SortOrder normalize-sort-order [order]
   (cond

@@ -1,6 +1,6 @@
 (ns retroact.swing.util
   (:import (java.awt Component Container)
-           (javax.swing JComponent)
+           (javax.swing JComponent JScrollPane)
            (java.util WeakHashMap)
            (retroact.swing.compiled.identity_wrapper IdentityWrapper)))
 
@@ -96,3 +96,11 @@
                                                                              (.getComponents onscreen-component)))))
         :else (do (clear-single-onscreen-component onscreen-component)
                   (recur (rest onscreen-components)))))))
+
+(defn get-parent-scroll-pane [c]
+  (loop [c c]
+    (if (instance? JScrollPane c)
+      c
+      (if (nil? (.getParent c))
+        nil
+        (recur (.getParent c))))))

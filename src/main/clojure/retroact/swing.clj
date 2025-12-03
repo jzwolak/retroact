@@ -1,38 +1,35 @@
 (ns retroact.swing
-  (:require [clojure.pprint :refer [pprint]]
-            [clojure.string :as str]
+  (:require [clojure.set :refer [difference]]
             [clojure.tools.logging :as log]
-            [clojure.set :refer [difference]]
-            [retroact.swing.create-fns :as create]
             [retroact.swing.borders :as borders]
+            [retroact.swing.create-fns :as create]
             [retroact.swing.event-queue :as event-queue]
+            [retroact.swing.jcombobox :refer [create-jcombobox]]
+            [retroact.swing.jlist :refer [create-jlist]]
+            [retroact.swing.jtable :refer [create-jtable get-table-header safe-table-model-set
+                                           set-column-selection-allowed set-editing-cell set-row-selection-allowed
+                                           set-table-auto-resize-mode set-table-columns set-table-get-item-at-fn
+                                           set-table-header set-table-intercell-spacing set-table-render-fn
+                                           set-table-set-value-at-fn set-table-sort]]
+            [retroact.swing.jtree :refer [create-jtree set-tree-data set-tree-model-fn set-tree-render-fn
+                                          set-tree-scroll-path-fn set-tree-selection-fn set-tree-toggle-click-count]]
             [retroact.swing.listeners :as listeners]
             [retroact.swing.menu-bar :as mb]
-            [retroact.swing.jlist :refer [create-jlist]]
-            [retroact.swing.jtree :refer [create-jtree set-tree-model-fn set-tree-render-fn set-tree-data
-                                          set-tree-toggle-click-count set-tree-selection-fn set-tree-scroll-path-fn]]
-           [retroact.swing.jtable :refer [create-jtable safe-table-model-set set-table-selection-fn
-                                          set-table-render-fn set-table-set-value-at-fn set-table-get-item-at-fn
-                                          set-table-columns set-table-auto-resize-mode set-table-sort
-                                          set-table-intercell-spacing set-row-selection-allowed set-column-selection-allowed
-                                          set-table-header get-table-header]]
-            [retroact.swing.jcombobox :refer [create-jcombobox]]
             [retroact.swing.util :as util :refer [silenced-events]]
             [retroact.toolkit.property-getters-setters :refer [set-property]])
   (:import (clojure.lang ArityException Atom)
-           (java.awt AWTEvent CardLayout Color Component Container Dimension BorderLayout EventQueue Font GridBagLayout Toolkit Window)
+           (java.awt AWTEvent BorderLayout CardLayout Component Container Dimension EventQueue Font GridBagLayout Toolkit Window)
            (java.awt.dnd DnDConstants DragGestureListener DragSource DragSourceAdapter DropTarget DropTargetAdapter)
-           (java.awt.event ActionListener ComponentAdapter ComponentListener FocusAdapter FocusListener KeyListener MouseAdapter MouseListener MouseWheelListener WindowAdapter)
+           (java.awt.event ActionListener ComponentListener FocusListener KeyListener MouseListener MouseWheelListener)
            (java.beans PropertyChangeListener)
            (java.util WeakHashMap)
-           (javax.swing JButton JCheckBox JCheckBoxMenuItem JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JProgressBar JScrollPane JSeparator JSplitPane JTabbedPane JTextArea JTextField JComponent JTable JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities TransferHandler WindowConstants)
+           (javax.swing JButton JCheckBox JCheckBoxMenuItem JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JProgressBar JScrollPane JSeparator JSplitPane JTabbedPane JTable JTextField JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities WindowConstants)
            (javax.swing.border TitledBorder)
            (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (javax.swing.table JTableHeader)
            (net.miginfocom.swing MigLayout)
-           (retroact.swing.compiled.identity_wrapper IdentityWrapper)
-           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
+           (retroact.swing.compiled.listeners RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -825,7 +822,8 @@
    :row-editable-fn        set-row-editable-fn
    :row-fn                 set-row-fn
    :table-data             set-table-data
-   :selection              set-table-selection
+   :selection              {:deps [:table-data]
+                            :fn   set-table-selection}
    :table-header {:set set-table-header
                   :get get-table-header}
    ;:table-selection-fn     set-table-selection-fn
@@ -842,6 +840,9 @@
    :table-columns {:deps                   [:table-data :row-fn :column-names]
                    :update-on-deps-changed true
                    :fn                     set-table-columns}
+   :editing-cell  {:deps                   [:table-data :row-fn]
+                   :update-on-deps-changed true
+                   :fn                     set-editing-cell}
    ; Tree attr appliers
    ; TODO: implement this to set the scrolls on expand of JTree
    ;:scrolls-on-expand      set-scrolls-on-expand

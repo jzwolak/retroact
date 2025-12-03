@@ -2,7 +2,7 @@
   (:require [clojure.tools.logging :as log]
             [retroact.swing.util :as util])
   (:import (java.awt Dimension)
-           (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder)
+           (javax.swing JScrollPane JTable RowSorter$SortKey SortOrder SwingUtilities)
            (javax.swing.table AbstractTableModel TableModel TableRowSorter)
            (retroact.swing.compiled.jtable RTableModel)))
 
@@ -188,6 +188,57 @@
 (defn set-table-columns
   [c ctx columns]
   (safe-table-set c set-table-columns- columns))
+
+(defn set-editing-cell
+  "Set the editing cell for a JTable. Accepts [row col] or nil to stop editing.
+   This will call editCellAt on the JTable to start editing the specified cell."
+  [c ctx editing-cell]
+  (safe-table-set
+    c
+    (fn [^JTable t cell-spec]
+      (if (nil? cell-spec)
+        (when (.isEditing t)
+          (let [editor (.getCellEditor t)]
+            (when editor
+              (.stopCellEditing editor))))
+        (let [[row col] cell-spec]
+          (when (and (>= row 0) (< row (.getRowCount t))
+                     (>= col 0) (< col (.getColumnCount t))
+                     (.isCellEditable (.getModel t) row col))
+            ; Only change editing if it's different from current
+            (let [current-editing-row (.getEditingRow t)
+                  current-editing-col (.getEditingColumn t)]
+              (when (not (and (= current-editing-row row)
+                            (= current-editing-col col)
+                            (.isEditing t)))
+                ; Use invokeLater to ensure this happens after current rendering
+                (SwingUtilities/invokeLater
+                  (fn []
+                    ; Stop any current editing first
+                    (when (.isEditing t)
+                      (let [editor (.getCellEditor t)]
+                        (when editor
+                          (.stopCellEditing editor))))
+                    ; Ensure the cell is still valid and editable
+                    (when (and (>= row 0) (< row (.getRowCount t))
+                               (>= col 0) (< col (.getColumnCount t))
+                               (.isCellEditable (.getModel t) row col))
+                      ; Scroll to make the cell visible
+                      (let [rect (.getCellRect t row col false)]
+                        (.scrollRectToVisible t rect))
+                      ; Start editing the new cell - try multiple times if needed
+                      (loop [attempts 3]
+                        (when (and (> attempts 0) (not (.isEditing t)))
+                          (.editCellAt t (int row) (int col))
+                          (when (not (.isEditing t))
+                            (Thread/sleep 10)
+                            (recur (dec attempts)))))
+                      ; Request focus to ensure the editor is active
+                      (when-let [editor-comp (.getEditorComponent t)]
+                        (.requestFocus editor-comp))
+                      (when (not (.isEditing t))
+                        (log/warn "Failed to start editing cell at row" row "col" col)))))))))))
+    editing-cell))
 
 (defn create-jtable [{:keys [view]}]
   (let [table-model (RTableModel.)

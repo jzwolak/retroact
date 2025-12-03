@@ -96,7 +96,7 @@
   (safe-table-set
     c
     (fn [t h]
-      (let [sp (util/get-parent-scroll-pane t)]
+      (let [#_sp #_(util/get-parent-scroll-pane t)]
         (.setColumnModel h (.getColumnModel t))
         (.setTableHeader t h)
         #_(.setColumnHeaderView sp h)))

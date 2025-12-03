@@ -264,26 +264,27 @@ There are three basic types of appliers: fn applier, component applier, and chil
 * children applier - assumes the attribute points to a list or array of components that must be managed. The rendered
   view will be a vector of maps where each map represents a component.
 
-Here are some examples of the specification and usage of each type of applier.
+Here are some examples of the specification and usage of each type of applier. Every `-fn` symbol must be defined by
+you or already be defined elsewhere.
 
 ```clojure
 ; specification
-{:fn-applier           attr-setter-fn
- :fn-applier-alternate {:fn attr-setter2-fn}
- :component-applier    {:set set-component-fn
-                        :get get-component-fn}
- :children-applier     {:get-child-at          get-child-at-fn
-                        :add-new-child-at      add-new-child-at-fn
-                        :get-existing-children get-existing-children-fn
-                        :remove-child-at       remove-child-at-fn}}
+{:my-attr      attr-setter-fn                                  ; fn applier
+ :my-attr2     {:fn attr-setter2-fn}                           ; alternate fn applier
+ :my-component {:set set-component-fn                          ; component applier
+                :get get-component-fn}
+ :my-children  {:get-child-at          get-child-at-fn         ; children applier
+                :add-new-child-at      add-new-child-at-fn
+                :get-existing-children get-existing-children-fn
+                :remove-child-at       remove-child-at-fn}}
 
 ; usage
 (defn render-fn [app-ref app-val]
   {:class :my-comp
-   :fn-applier "bar"
-   :fn-applier-alternate "foo"
-   :component-applier {:class :label :text "World"}
-   :children-applier [{:class :label :text "Hello"}]})
+   :my-attr "bar"
+   :my-attr2 "foo"
+   :my-component {:class :label :text "World"}
+   :my-children [{:class :label :text "Hello"}]})
 ```
 
 See `retroact.swing` for complete examples of the implementations of the different types.

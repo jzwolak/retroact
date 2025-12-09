@@ -214,8 +214,14 @@
 (defn- set-horizontal-scroll-bar-policy [c ctx policy]
   (set-property c policy #(.getHorizontalScrollBarPolicy %) #(.setHorizontalScrollBarPolicy %1 %2)))
 
+(defn- set-horizontal-unit-increment [c ctx unit-increment]
+  (set-property (.getHorizontalScrollBar c) unit-increment #(.getUnitIncrement %) #(.setUnitIncrement %1 %2)))
+
 (defn- set-vertical-scroll-bar-policy [c ctx policy]
   (set-property c policy #(.getVerticalScrollBarPolicy %) #(.setVerticalScrollBarPolicy %1 %2)))
+
+(defn- set-vertical-unit-increment [c ctx unit-increment]
+  (set-property (.getVerticalScrollBar c) unit-increment #(.getUnitIncrement %) #(.setUnitIncrement %1 %2)))
 
 (defn- get-default-size [c]
   (let [preferred-size (.getPreferredSize c)
@@ -856,10 +862,12 @@
    ; Scroll pane appliers
    :horizontal-scroll-bar set-horizontal-scroll-bar
    :horizontal-scroll-bar-policy set-horizontal-scroll-bar-policy
+   :horizontal-unit-increment set-horizontal-unit-increment
    :on-vertical-scroll on-vertical-scroll
    :on-horizontal-scroll on-horizontal-scroll
    :vertical-scroll-bar set-vertical-scroll-bar
    :vertical-scroll-bar-policy set-vertical-scroll-bar-policy
+   :vertical-unit-increment set-vertical-unit-increment
    :viewport-border borders/set-viewport-border
    :viewport-view {:set (fn set-viewport-view [c ctx component] (.setViewportView ^JScrollPane c component))
                    :get (fn get-viewport-view [c ctx] (.getView (.getViewport c)))}

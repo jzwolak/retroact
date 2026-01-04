@@ -128,6 +128,9 @@
   [c ctx t-count]
   (safe-tree-set c (memfn setToggleClickCount t-count) t-count))
 
+(defn set-tree-large-model [c ctx large-model?]
+  (safe-tree-set c (memfn setLargeModel large-model?) large-model?))
+
 (defn create-jtree [ctx]
   (let [tree-model (RTreeModel.)
         tree (JTree. ^TreeModel tree-model)]

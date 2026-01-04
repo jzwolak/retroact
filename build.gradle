@@ -9,6 +9,9 @@ plugins {
 version = "0.5.2"
 group = "com.insilicalabs"
 
+sourceCompatibility = JavaVersion.VERSION_17
+targetCompatibility = JavaVersion.VERSION_17
+
 
 // See Swing Builder for the publishing stuff to add here.
 // Try to publish to Clojars, not Maven Central.

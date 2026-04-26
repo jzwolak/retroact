@@ -120,7 +120,7 @@
 (defn- scroll-path-to-visible [tree-component state]
   (let [tree-scroll-path (:tree-scroll-path state)]
     (when tree-scroll-path
-      (log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path "and" (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path)))
+      #_(log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path "and" (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path)))
       (.scrollPathToVisible tree-component (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path))))))
 
 (defn- create-component-listener [tree-model]
@@ -159,7 +159,7 @@
                       "Continuing, but behavior may not be correct.")))
     (when (not= old-tree new-tree)
       (let [tree-model-event (TreeModelEvent. this (object-array [(:tree-root new-value)]))]
-        (log/info "[no-jump] tree structure changed")
+        #_(log/info "[no-jump] tree structure changed")
         (doseq [listener listeners]
           (.treeStructureChanged listener tree-model-event))))
     (when (not= old-tree-selection new-tree-selection)
@@ -169,12 +169,12 @@
                                (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
                              new-tree-selection)]
         (when (some nil? tree-paths) (log/warn "some tree path is nil"))
-        (log/info "[no-jump] setting selection paths")
+        #_(log/info "[no-jump] setting selection paths")
         (.setSelectionPaths tree-component (into-array TreePath tree-paths))))
     ; Yes, use old-value and new-value because this may depend on other parts of the tree state. So use the whole tree
     ; state.
     (when (not= old-value new-value)
-      (log/info "[no-jump] calling scroll-path-to-visible")
+      #_(log/info "[no-jump] calling scroll-path-to-visible")
       (scroll-path-to-visible tree-component new-value))))
 
 (defn rtree-model-init-state []
@@ -201,7 +201,7 @@
 (defn- update-tree-scroll-path [{:keys [data tree tree-root tree-scroll-path-fn] :as state}]
   (if tree-scroll-path-fn
     (do
-      (log/info "[no-jump] update-tree-scroll-path calling tree-scroll-path-fn")
+      #_(log/info "[no-jump] update-tree-scroll-path calling tree-scroll-path-fn")
       (assoc state :tree-scroll-path (tree-scroll-path-fn tree-root tree data)))
     (dissoc state :tree-scroll-path)))
 

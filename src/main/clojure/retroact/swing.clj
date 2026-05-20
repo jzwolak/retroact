@@ -145,7 +145,9 @@
 
 (def pane-orientation-map
   {:vertical JSplitPane/VERTICAL_SPLIT
-   :horizontal JSplitPane/HORIZONTAL_SPLIT})
+   :horizontal JSplitPane/HORIZONTAL_SPLIT
+   JSplitPane/VERTICAL_SPLIT JSplitPane/VERTICAL_SPLIT
+   JSplitPane/HORIZONTAL_SPLIT JSplitPane/HORIZONTAL_SPLIT})
 
 (def orientation-map
   {:vertical   SwingConstants/VERTICAL

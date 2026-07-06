@@ -211,7 +211,7 @@
   "Return the application state associated with the given row. Defaults to nth of :data.
   Can be overriden by providing a :get-item-at-fn function."
   [this row]
-  (log/info "getting item at row " row)
+  #_(log/info "getting item at row " row)
   (get-item-at @(.state this) row))
 
 (defn rtable-model-setGetItemAtFn [this get-item-at-fn]

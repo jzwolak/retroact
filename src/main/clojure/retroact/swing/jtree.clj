@@ -57,6 +57,14 @@
 ;;   Fn of three args: (fn [tree-root tree data]). Should return a single path vector
 ;;   (same format as above). When it changes, the JTree scrolls that path into view.
 ;;
+;; - :tree-node-identity-fn
+;;   Fn of one arg: (fn [node] <identity>). Says which node values represent the
+;;   same node — a domain id, typically. Optional; defaults to identity (value
+;;   equality). Recomputing :tree tells the JTree its structure changed, which
+;;   makes it forget every expanded path, so the model puts the expansion back
+;;   afterwards; this fn is how it recognises a node whose value the app
+;;   rewrote in the meantime.
+;;
 ;; - :toggle-click-count
 ;;   Integer passed to JTree.setToggleClickCount. Controls how many clicks expand /
 ;;   collapse (e.g., 1 or 2). This is set directly on the JTree component.
@@ -95,6 +103,16 @@
   is a vector of nodes from the root down to the node to reveal."
   [c ctx tree-scroll-path-fn]
   (safe-tree-model-set c (memfn setScrollPathFn tree-scroll-path-fn) tree-scroll-path-fn))
+
+(defn set-tree-node-identity-fn
+  "Set the function that says which node values are the same node.
+  tree-node-identity-fn: (fn [node] <identity>), e.g. a domain id. Defaults to
+  identity, i.e. node values are compared with =.
+  This is what lets the JTree keep a node expanded when :tree-data brings back a
+  rewritten value for it (an extra attribute loaded onto it, for instance); with
+  the default such a node reads as a new node and collapses."
+  [c ctx tree-node-identity-fn]
+  (safe-tree-model-set c (memfn setNodeIdentityFn tree-node-identity-fn) tree-node-identity-fn))
 
 (defn set-tree-model-fn
   "Set the model function used to derive the tree structure from :tree-data.

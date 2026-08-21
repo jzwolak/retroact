@@ -11,9 +11,9 @@
                                            set-table-auto-resize-mode set-table-columns set-table-get-item-at-fn
                                            set-table-header set-table-intercell-spacing set-table-render-fn
                                            set-table-set-value-at-fn set-table-sort]]
-            [retroact.swing.jtree :refer [create-jtree set-tree-data set-tree-model-fn set-tree-render-fn
-                                          set-tree-scroll-path-fn set-tree-selection-fn set-tree-toggle-click-count
-                                          set-tree-large-model]]
+            [retroact.swing.jtree :refer [create-jtree set-tree-data set-tree-model-fn set-tree-node-identity-fn
+                                          set-tree-render-fn set-tree-scroll-path-fn set-tree-selection-fn
+                                          set-tree-toggle-click-count set-tree-large-model]]
             [retroact.swing.listeners :as listeners]
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.util :as util :refer [silenced-events]]
@@ -856,6 +856,7 @@
    :tree-render-fn set-tree-render-fn
    :tree-model-fn set-tree-model-fn
    :tree-selection-fn set-tree-selection-fn
+   :tree-node-identity-fn set-tree-node-identity-fn
    :tree-scroll-path-fn set-tree-scroll-path-fn
    :tree-data set-tree-data
    :toggle-click-count set-tree-toggle-click-count

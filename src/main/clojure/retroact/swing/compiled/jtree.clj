@@ -30,6 +30,10 @@
 ;;                      optionally updates the current :tree-root.
 ;; - :tree-render-fn    (fn [node] <string | {:value string :icon Icon}>). Used by
 ;;                      RTreeCellRenderer to render each node.
+;; - :tree-node-identity-fn
+;;                      (fn [node] <identity>) — what makes two node values the
+;;                      same node. Defaults to identity (i.e. value equality) and
+;;                      is used only to carry expansion across a structure change.
 ;; - :tree-selection    A vector of path vectors (each path lists nodes from root
 ;;                      to a selected node). Maintained by model via
 ;;                      :tree-selection-fn (see below) and applied to the JTree.
@@ -47,6 +51,13 @@
 ;; Life cycle and updates
 ;; - setData => recompute :tree via :tree-model-fn; then recompute selection and
 ;;   scroll path via their fns; then notify listeners of structure changes.
+;; - Expansion and selection are view state the app never describes in :tree-data,
+;;   but JTree discards both when it is told the structure changed. So the model
+;;   captures the expanded paths first and re-expands the ones the new tree still
+;;   has, and reapplies the current selection after any structure change. Nodes
+;;   are matched with :tree-node-identity-fn, so a node the app rewrote (loading
+;;   an extra attribute onto it, say) still counts as the same node; without that
+;;   fn the match is by value and such a node collapses.
 ;; - setModelFn => replace :tree-model-fn; then recompute :tree, selection, scroll.
 ;; - setSelectionFn => replace :tree-selection-fn; then recompute :tree-selection.
 ;; - setScrollPathFn => replace :tree-scroll-path-fn; then recompute scroll path.
@@ -98,7 +109,8 @@
             [setRenderFn [clojure.lang.IFn] void]
             [setTreeComponent [javax.swing.JTree] void]
             [setSelectionFn [clojure.lang.IFn] void]
-            [setScrollPathFn [clojure.lang.IFn] void]])
+            [setScrollPathFn [clojure.lang.IFn] void]
+            [setNodeIdentityFn [clojure.lang.IFn] void]])
 
 (gen-class
   :name "retroact.swing.compiled.jtree.RTreeCellRenderer"
@@ -117,11 +129,64 @@
     (doseq [path-part (.getPath tree-path)]
       (log/info "    part:" path-part))))
 
+(defn- to-tree-path
+  "TreePath for `path`, a sequence of nodes running from the tree root down."
+  ^TreePath [path]
+  (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+
+(defn- expanded-paths
+  "The paths the user currently has expanded, each a vector of nodes starting at
+   the root. Realized eagerly because JTree throws its expanded state away as
+   soon as it hears the structure changed, leaving the enumeration empty."
+  [tree-component tree-root]
+  (when tree-component
+    (when-let [descendants (.getExpandedDescendants tree-component (to-tree-path [tree-root]))]
+      (mapv (fn path-nodes [^TreePath tree-path] (vec (.getPath tree-path)))
+            (enumeration-seq descendants)))))
+
+(defn- children-by-identity
+  "A parent's children in `tree` indexed by their identity. First one wins, the
+   way getIndexOfChild resolves a duplicate."
+  [tree node-identity-fn parent]
+  (reduce (fn index-child [acc child]
+            (let [id (node-identity-fn child)]
+              (if (contains? acc id) acc (assoc acc id child))))
+          {} (get tree parent)))
+
+(defn- current-path
+  "Rebuild `path` from the nodes the tree holds now, or nil when some node along
+   it is no longer a child of its predecessor. `children-of` matches by identity,
+   so a node whose value changed - it gained an attribute, say - is still
+   recognised as the same node, and the rebuilt path carries the tree's current
+   node objects rather than the ones the JTree was holding."
+  [tree-root node-identity-fn children-of path]
+  (when (= tree-root (first path))
+    (loop [current [tree-root] parent tree-root nodes (rest path)]
+      (if (empty? nodes)
+        current
+        (if-let [entry (find (children-of parent) (node-identity-fn (first nodes)))]
+          (let [child (val entry)]
+            (recur (conj current child) child (rest nodes)))
+          nil)))))
+
+(defn- restore-expanded-paths
+  "Re-expand what was expanded before the structure changed, dropping paths the
+   new tree no longer has. Shortest first, so a node is only expanded once its
+   parent is."
+  [tree-component tree tree-root node-identity-fn paths]
+  ;; Expanded paths overlap heavily - siblings share a parent, and every path
+  ;; starts at the root - so index each parent once rather than per path.
+  (let [children-of (memoize (partial children-by-identity tree node-identity-fn))]
+    (doseq [path (sort-by count (keep (fn to-current-path [path]
+                                        (current-path tree-root node-identity-fn children-of path))
+                                      paths))]
+      (.expandPath tree-component (to-tree-path path)))))
+
 (defn- scroll-path-to-visible [tree-component state]
   (let [tree-scroll-path (:tree-scroll-path state)]
     (when tree-scroll-path
-      (log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path "and" (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path)))
-      (.scrollPathToVisible tree-component (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path))))))
+      (log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path)
+      (.scrollPathToVisible tree-component (to-tree-path tree-scroll-path)))))
 
 (defn- create-component-listener [tree-model]
   (proxy [ComponentAdapter] []
@@ -158,15 +223,31 @@
                  (str "RTreeModel method called off EDT. RTreeModel methods should be called on EDT. "
                       "Continuing, but behavior may not be correct.")))
     (when (not= old-tree new-tree)
-      (let [tree-model-event (TreeModelEvent. this (object-array [(:tree-root new-value)]))]
+      (let [tree-root (:tree-root new-value)
+            ;; A structure change at the root makes JTree forget every expanded
+            ;; path (and drop the selection below the root). Neither is part of
+            ;; :tree-data - they are the user's, not the app's - so capture the
+            ;; expansion before the event and put it back after. The selection
+            ;; is reapplied below.
+            expanded (when (= (:tree-root old-value) tree-root)
+                       (expanded-paths tree-component tree-root))
+            tree-model-event (TreeModelEvent. this (object-array [tree-root]))]
         (log/info "[no-jump] tree structure changed")
         (doseq [listener listeners]
-          (.treeStructureChanged listener tree-model-event))))
-    (when (not= old-tree-selection new-tree-selection)
+          (.treeStructureChanged listener tree-model-event))
+        (when (seq expanded)
+          (restore-expanded-paths tree-component new-tree tree-root
+                                  (:tree-node-identity-fn new-value identity) expanded))))
+    ; The structure change above cleared the JTree's selection, so reapply the
+    ; selection whenever the tree changed - not only when the selection itself
+    ; changed - otherwise the view silently loses a selection the app still holds.
+    (when (and tree-component
+               (or (not= old-tree-selection new-tree-selection)
+                   (and (not= old-tree new-tree) (seq new-tree-selection))))
       (let [tree-paths (mapv (fn [path]
                                (when (nil? path) (log/warn "jtree creating TreePath with nil object"))
                                (when (some nil? path) (log/warn "some element of path is nil:" path))
-                               (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+                               (to-tree-path path))
                              new-tree-selection)]
         (when (some nil? tree-paths) (log/warn "some tree path is nil"))
         (log/info "[no-jump] setting selection paths")
@@ -186,6 +267,7 @@
                      :tree-selection nil
                      :tree-model-fn default-tree-model-fn
                      :tree-render-fn identity
+                     :tree-node-identity-fn identity
                      :listeners #{}})]
     #_(add-watch state :tree-model-self-watch tree-model-watch)
     [[] state]))
@@ -293,6 +375,12 @@
 (defn rtree-model-setScrollPathFn
   [this scroll-path-fn]
   (swap! (.state this) assoc :tree-scroll-path-fn scroll-path-fn))
+
+; Only used to carry expansion across a structure change - the tree itself is
+; never rebuilt because of it, so there is nothing to recompute here.
+(defn rtree-model-setNodeIdentityFn
+  [this node-identity-fn]
+  (swap! (.state this) assoc :tree-node-identity-fn (or node-identity-fn identity)))
 
 (defn rtree-model-setTreeComponent
   [this tree-component]

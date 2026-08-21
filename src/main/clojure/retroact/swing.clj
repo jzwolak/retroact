@@ -11,9 +11,9 @@
                                            set-table-auto-resize-mode set-table-columns set-table-get-item-at-fn
                                            set-table-header set-table-intercell-spacing set-table-render-fn
                                            set-table-set-value-at-fn set-table-sort]]
-            [retroact.swing.jtree :refer [create-jtree set-tree-data set-tree-model-fn set-tree-render-fn
-                                          set-tree-scroll-path-fn set-tree-selection-fn set-tree-toggle-click-count
-                                          set-tree-large-model]]
+            [retroact.swing.jtree :refer [create-jtree set-tree-data set-tree-expansion-fn set-tree-model-fn
+                                          set-tree-render-fn set-tree-scroll-path-fn set-tree-selection-fn
+                                          set-tree-toggle-click-count set-tree-large-model]]
             [retroact.swing.listeners :as listeners]
             [retroact.swing.menu-bar :as mb]
             [retroact.swing.util :as util :refer [silenced-events]]
@@ -26,11 +26,11 @@
            (java.util WeakHashMap)
            (javax.swing JButton JCheckBox JCheckBoxMenuItem JComboBox JDialog JFileChooser JFrame JLabel JList JMenu JMenuItem JPanel JPopupMenu JProgressBar JScrollPane JSeparator JSplitPane JTabbedPane JTable JTextField JTextPane JToggleButton JToolBar JTree RootPaneContainer SwingConstants SwingUtilities WindowConstants)
            (javax.swing.border TitledBorder)
-           (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
+           (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeExpansionListener TreeSelectionListener)
            (javax.swing.filechooser FileNameExtensionFilter)
            (javax.swing.table JTableHeader)
            (net.miginfocom.swing MigLayout)
-           (retroact.swing.compiled.listeners RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)
+           (retroact.swing.compiled.listeners RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange RetroactSwingOnTreeExpansion)
            (retroact.swing.compiled.retroact_invocation_event RetroactInvocationEvent)))
 
 
@@ -641,6 +641,21 @@
 (defmethod on-selection-change JScrollPane [c ctx selection-change-handler]
   (on-selection-change (get-scrollable-view c) ctx selection-change-handler))
 
+(defmulti on-tree-expansion (fn [c _ _] (class c)))
+
+(defmethod on-tree-expansion JTree [c ctx expansion-handler]
+  (listeners/remove-listener c TreeExpansionListener RetroactSwingOnTreeExpansion)
+  (when expansion-handler
+    (.addTreeExpansionListener
+      c (listeners/proxy-tree-expansion-listener
+          ctx
+          (fn tree-expansion [event expanded?]
+            (expansion-handler (:app-ref ctx) (util/get-view c) c
+                               (vec (.getPath (.getPath event))) expanded?))))))
+
+(defmethod on-tree-expansion JScrollPane [c ctx expansion-handler]
+  (on-tree-expansion (get-scrollable-view c) ctx expansion-handler))
+
 (defn on-text-change [c ctx text-change-handler]
   (listeners/remove-listener (.getDocument c) DocumentListener RetroactSwingOnTextChange)
   #_(doseq [dl (vec (-> c .getDocument .getDocumentListeners))]
@@ -856,6 +871,7 @@
    :tree-render-fn set-tree-render-fn
    :tree-model-fn set-tree-model-fn
    :tree-selection-fn set-tree-selection-fn
+   :tree-expansion-fn set-tree-expansion-fn
    :tree-scroll-path-fn set-tree-scroll-path-fn
    :tree-data set-tree-data
    :toggle-click-count set-tree-toggle-click-count
@@ -891,6 +907,7 @@
    :on-key-pressed on-key-pressed
    :on-property-change on-property-change
    :on-selection-change on-selection-change
+   :on-tree-expansion on-tree-expansion
    :on-text-change on-text-change
    :on-set-value-at on-set-value-at
    ; Mouse listeners

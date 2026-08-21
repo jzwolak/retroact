@@ -57,6 +57,20 @@
 ;;   Fn of three args: (fn [tree-root tree data]). Should return a single path vector
 ;;   (same format as above). When it changes, the JTree scrolls that path into view.
 ;;
+;; - :tree-expansion-fn
+;;   Fn of three args: (fn [tree-root tree data] <paths>), the same shape as
+;;   :tree-selection-fn. Returns the paths that should be expanded. Supplying it
+;;   makes expansion a function of your state instead of something the JTree
+;;   keeps to itself — which matters because Swing throws its expansion away
+;;   every time the tree structure changes, and :tree-data changing is a
+;;   structure change. Pair it with :on-tree-expansion.
+;;
+;; - :on-tree-expansion
+;;   Handler (fn [app-ref view component path expanded?]) called when the user
+;;   opens or closes a node. `path` is a vector of nodes from the root down and
+;;   `expanded?` is true for an open, false for a close. Record it in your state
+;;   so :tree-expansion-fn can hand it back.
+;;
 ;; - :toggle-click-count
 ;;   Integer passed to JTree.setToggleClickCount. Controls how many clicks expand /
 ;;   collapse (e.g., 1 or 2). This is set directly on the JTree component.
@@ -95,6 +109,17 @@
   is a vector of nodes from the root down to the node to reveal."
   [c ctx tree-scroll-path-fn]
   (safe-tree-model-set c (memfn setScrollPathFn tree-scroll-path-fn) tree-scroll-path-fn))
+
+(defn set-tree-expansion-fn
+  "Set a function that says which nodes are expanded.
+  tree-expansion-fn: (fn [tree-root tree data] <vector-of-paths>), same path
+  shape as the selection fn. Whatever it returns is what the JTree shows as
+  open, so the app holds the expansion in its own state and derives it here.
+  Supply :on-tree-expansion as well, to record what the user opens and closes.
+  Without this fn the JTree keeps its own expansion, which Swing discards
+  whenever the tree structure changes."
+  [c ctx tree-expansion-fn]
+  (safe-tree-model-set c (memfn setExpansionFn tree-expansion-fn) tree-expansion-fn))
 
 (defn set-tree-model-fn
   "Set the model function used to derive the tree structure from :tree-data.

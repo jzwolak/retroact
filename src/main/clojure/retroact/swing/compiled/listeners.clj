@@ -13,6 +13,7 @@
 (definterface RetroactSwingOnPropertyChange)
 (definterface RetroactSwingOnSelectionChange)
 (definterface RetroactSwingOnTextChange)
+(definterface RetroactSwingOnTreeExpansion)
 ; no RetroactSwingOnSetValueAt because this is not a Java Swing listener, it is a Retroact specific fn.
 (definterface RetroactSwingOnFocusGained)
 (definterface RetroactSwingOnFocusLost)

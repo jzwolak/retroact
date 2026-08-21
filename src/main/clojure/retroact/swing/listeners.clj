@@ -3,8 +3,8 @@
             [retroact.swing.util :refer [silenced-events get-view get-comp-id]])
   (:import (java.awt.event ActionListener ComponentAdapter FocusAdapter KeyAdapter MouseAdapter MouseWheelListener WindowAdapter)
            (java.beans PropertyChangeListener)
-           (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeSelectionListener)
-           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnClose RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange)))
+           (javax.swing.event ChangeListener DocumentListener ListSelectionListener TreeExpansionListener TreeSelectionListener)
+           (retroact.swing.compiled.listeners RetroactSwingListener RetroactSwingOnAction RetroactSwingOnChange RetroactSwingOnClick RetroactSwingOnClose RetroactSwingOnComponentHidden RetroactSwingOnComponentResize RetroactSwingOnComponentShown RetroactSwingOnFocusGained RetroactSwingOnFocusLost RetroactSwingOnKeyPressed RetroactSwingOnMouseWheelMoved RetroactSwingOnPropertyChange RetroactSwingOnSelectionChange RetroactSwingOnTextChange RetroactSwingOnTreeExpansion)))
 
 (defn- get-view-or-identity [c] (or (get-view c) c))
 
@@ -89,6 +89,11 @@
             ; indicate the path and the same value may be at multiple leafs.
             selected-values (mapv (fn [tree-path] (.getLastPathComponent tree-path)) (.getSelectionPaths onscreen-component))]
         (selection-change-handler (:app-ref ctx) (get-view onscreen-component) onscreen-component selected-values)))))
+
+(defn proxy-tree-expansion-listener [ctx expansion-handler]
+  (proxy [TreeExpansionListener RetroactSwingOnTreeExpansion] []
+    (treeExpanded [event] (expansion-handler event true))
+    (treeCollapsed [event] (expansion-handler event false))))
 
 (defn proxy-list-selection-listener [ctx selection-change-handler]
   (proxy [ListSelectionListener RetroactSwingOnSelectionChange] []

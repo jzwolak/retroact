@@ -30,6 +30,11 @@
 ;;                      optionally updates the current :tree-root.
 ;; - :tree-render-fn    (fn [node] <string | {:value string :icon Icon}>). Used by
 ;;                      RTreeCellRenderer to render each node.
+;; - :tree-expansion     A vector of path vectors naming the nodes that should be
+;;                      expanded. Maintained by model via :tree-expansion-fn and
+;;                      applied to the JTree.
+;; - :tree-expansion-fn (fn [tree-root tree data] <vector-of-paths>) — computes
+;;                      :tree-expansion when data or the model fn changes.
 ;; - :tree-selection    A vector of path vectors (each path lists nodes from root
 ;;                      to a selected node). Maintained by model via
 ;;                      :tree-selection-fn (see below) and applied to the JTree.
@@ -45,8 +50,16 @@
 ;;                      needed (e.g. after resize or reparenting).
 ;;
 ;; Life cycle and updates
-;; - setData => recompute :tree via :tree-model-fn; then recompute selection and
-;;   scroll path via their fns; then notify listeners of structure changes.
+;; - setData => recompute :tree via :tree-model-fn; then recompute expansion,
+;;   selection and scroll path via their fns; then notify listeners of structure
+;;   changes.
+;; - JTree keeps expansion and selection of its own accord, and drops both when it
+;;   hears the structure changed. That makes them view state the app cannot see,
+;;   so an app that cares supplies :tree-expansion-fn (and :tree-selection-fn) and
+;;   holds the answer in its own state; the model then applies that state to the
+;;   JTree after every structure change, rather than the JTree remembering
+;;   anything across one. An app that supplies no :tree-expansion-fn gets plain
+;;   JTree behaviour: expansion is lost whenever the structure changes.
 ;; - setModelFn => replace :tree-model-fn; then recompute :tree, selection, scroll.
 ;; - setSelectionFn => replace :tree-selection-fn; then recompute :tree-selection.
 ;; - setScrollPathFn => replace :tree-scroll-path-fn; then recompute scroll path.
@@ -98,7 +111,8 @@
             [setRenderFn [clojure.lang.IFn] void]
             [setTreeComponent [javax.swing.JTree] void]
             [setSelectionFn [clojure.lang.IFn] void]
-            [setScrollPathFn [clojure.lang.IFn] void]])
+            [setScrollPathFn [clojure.lang.IFn] void]
+            [setExpansionFn [clojure.lang.IFn] void]])
 
 (gen-class
   :name "retroact.swing.compiled.jtree.RTreeCellRenderer"
@@ -117,11 +131,28 @@
     (doseq [path-part (.getPath tree-path)]
       (log/info "    part:" path-part))))
 
+(defn- to-tree-path
+  "TreePath for `path`, a sequence of nodes running from the tree root down."
+  ^TreePath [path]
+  (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+
+(defn- apply-tree-expansion
+  "Open the nodes in `expansion` and close the ones in `previous-expansion` that
+   are no longer named. Ancestors are expanded before their children and closed
+   after them, so a path is never toggled through a parent that is not open yet."
+  [tree-component previous-expansion expansion]
+  (let [previously (set previous-expansion)
+        now (set expansion)]
+    (doseq [path (sort-by count (remove previously now))]
+      (.expandPath tree-component (to-tree-path path)))
+    (doseq [path (sort-by count > (remove now previously))]
+      (.collapsePath tree-component (to-tree-path path)))))
+
 (defn- scroll-path-to-visible [tree-component state]
   (let [tree-scroll-path (:tree-scroll-path state)]
     (when tree-scroll-path
-      (log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path "and" (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path)))
-      (.scrollPathToVisible tree-component (TreePath. ^"[Ljava.lang.Object;" (into-array Object tree-scroll-path))))))
+      (log/info "[no-jump] calling scrollPathToVisible with path" tree-scroll-path)
+      (.scrollPathToVisible tree-component (to-tree-path tree-scroll-path)))))
 
 (defn- create-component-listener [tree-model]
   (proxy [ComponentAdapter] []
@@ -162,11 +193,23 @@
         (log/info "[no-jump] tree structure changed")
         (doseq [listener listeners]
           (.treeStructureChanged listener tree-model-event))))
-    (when (not= old-tree-selection new-tree-selection)
+    ; JTree answers a structure change by collapsing everything and dropping the
+    ; selection below the root, so both have to be applied again afterwards -
+    ; from the app's state, which still says what should be open and selected.
+    ; Treating the tree as newly collapsed is what makes that reapplication a
+    ; plain diff rather than a special case.
+    (when (and tree-component (:tree-expansion-fn new-value))
+      (let [old-tree-expansion (if (not= old-tree new-tree) [] (:tree-expansion old-value))
+            new-tree-expansion (:tree-expansion new-value)]
+        (when (not= old-tree-expansion new-tree-expansion)
+          (apply-tree-expansion tree-component old-tree-expansion new-tree-expansion))))
+    (when (and tree-component
+               (or (not= old-tree-selection new-tree-selection)
+                   (and (not= old-tree new-tree) (seq new-tree-selection))))
       (let [tree-paths (mapv (fn [path]
                                (when (nil? path) (log/warn "jtree creating TreePath with nil object"))
                                (when (some nil? path) (log/warn "some element of path is nil:" path))
-                               (TreePath. ^"[Ljava.lang.Object;" (into-array Object path)))
+                               (to-tree-path path))
                              new-tree-selection)]
         (when (some nil? tree-paths) (log/warn "some tree path is nil"))
         (log/info "[no-jump] setting selection paths")
@@ -193,6 +236,11 @@
 (defn rtree-model-post-init [this & _]
   (add-watch (.state this) :tree-model-self-watch (partial tree-model-watch this)) )
 
+(defn- update-tree-expansion [{:keys [data tree tree-root tree-expansion-fn] :as state}]
+  (if tree-expansion-fn
+    (assoc state :tree-expansion (vec (tree-expansion-fn tree-root tree data)))
+    (dissoc state :tree-expansion)))
+
 (defn- update-tree-selection [{:keys [data tree tree-root tree-selection tree-selection-fn] :as state}]
   (if tree-selection-fn
     (assoc state :tree-selection (tree-selection-fn tree-root tree data))
@@ -213,6 +261,7 @@
           [tree-root tree] (tree-model-fn (:tree-root state) data)]
       (assoc state :tree tree
                    :tree-root tree-root))
+    (update-tree-expansion)
     (update-tree-selection)
     (update-tree-scroll-path)))
 
@@ -293,6 +342,13 @@
 (defn rtree-model-setScrollPathFn
   [this scroll-path-fn]
   (swap! (.state this) assoc :tree-scroll-path-fn scroll-path-fn))
+
+(defn rtree-model-setExpansionFn
+  [this expansion-fn]
+  (swap! (.state this) (fn set-expansion-fn [state]
+                         (-> state
+                             (assoc :tree-expansion-fn expansion-fn)
+                             (update-tree-expansion)))))
 
 (defn rtree-model-setTreeComponent
   [this tree-component]

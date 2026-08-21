@@ -24,13 +24,13 @@
     (reify ListCellRenderer
       (getListCellRendererComponent [this list value index isSelected cellHasFocus]
         (swap! cell-panel-comp assoc :render (create-cell-render-fn render-fn value index isSelected cellHasFocus))
-        (log/info "calling update-component from cell-renderer")
+        #_(log/info "calling update-component from cell-renderer")
         (let [app-val (assoc-in @(:app-ref ctx)
                                 [:retroact :toolkit-config :redraw-onscreen-component]
                                 `redraw-onscreen-component-substitute)]
-          (log/info "redraw-onscreen-component-substitute is" (get-in app-val [:retroact :toolkit-config :redraw-onscreen-component]))
+          #_(log/info "redraw-onscreen-component-substitute is" (get-in app-val [:retroact :toolkit-config :redraw-onscreen-component]))
           (reset! cell-panel-comp (update-component (assoc ctx :app-val app-val) @cell-panel-comp)))
-        (log/info "returned from update-component from cell-renderer")
+        #_(log/info "returned from update-component from cell-renderer")
         (:onscreen-component @cell-panel-comp)))))
 
 (defn- create-cell-renderer []

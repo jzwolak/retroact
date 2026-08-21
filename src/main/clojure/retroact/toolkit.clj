@@ -24,7 +24,7 @@
     (run-on-toolkit-thread
       ctx
       (fn run-with-result []
-        (log/info "run-with-result:" f)
+        #_(log/info "run-with-result:" f)
         (let [result (try [::success (apply f args)]
                           (catch Exception ex
                             (log/info "exception while running" f)

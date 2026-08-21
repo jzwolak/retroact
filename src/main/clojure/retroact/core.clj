@@ -186,7 +186,7 @@
 
 (defn- apply-children-applier-fallback
   [attr-applier component ctx attr old-view new-view]
-  (log/warn "using fallback children applier. Try setting :id on all children for better performance and robustness.")
+  #_(log/warn "using fallback children applier. Try setting :id on all children for better performance and robustness.")
   (let [add-new-child-at (:add-new-child-at attr-applier)
         get-child-at (:get-child-at attr-applier)
         remove-child-at (:remove-child-at attr-applier)

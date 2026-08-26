@@ -819,11 +819,10 @@
    :orientation            set-orientation
    :divider-location       (fn set-divider-location [c ctx location]
                              (log/warn "setting divider location to" location)
-                             (if (int? location)
-                               (.setDividerLocation c ^int (int location))
-                               (do
-                                 (log/warn "using divider ratio")
-                                 (.setDividerLocation c ^double (double location)))))
+                             (cond
+                               (nil? location) (.resetToPreferredSizes c)
+                               (int? location) (.setDividerLocation c ^int (int location))
+                               :default (.setDividerLocation c ^double (double location))))
    ; careful with this one, it only works _after_ the component has a size... that is, rendered on screen.
    ;   :divider-location-ratio
    #_(fn set-divider-location [c ctx location]

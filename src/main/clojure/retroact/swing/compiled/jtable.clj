@@ -122,6 +122,16 @@
             [setSetValueAtFn [clojure.lang.IFn] void]
             [setTableComponent [javax.swing.JTable] void]])
 
+(defn- select-rows
+  "Add the rows of table-selection to the selection of table. This fn does not select a row again when that row is
+  already selected. Thus the anchor and the lead of the selection stay where the user put them."
+  [table table-selection]
+  (let [selectionModel ^ListSelectionModel (.getSelectionModel table)]
+    #_(.clearSelection selectionModel)
+    (doseq [row table-selection]
+      (when (not (.isSelectedIndex selectionModel row))
+        (.addSelectionInterval selectionModel row row)))))
+
 (defn- table-model-watch
   [this _key _ref old-value new-value]
   (let [old-data (:data old-value)
@@ -133,11 +143,7 @@
                  (str "RTableModel method called off EDT. RTableModel methods should be called on EDT. "
                       "Continuing, but behavior may not be correct.")))
     (when (not= table-selection-old table-selection-new)
-      (let [selectionModel ^ListSelectionModel (.getSelectionModel (:table-component new-value))]
-        #_(.clearSelection selectionModel)
-        (doseq [row table-selection-new]
-          (when (not (.isSelectedIndex selectionModel row))
-            (.addSelectionInterval selectionModel row row)))))
+      (select-rows (:table-component new-value) table-selection-new))
     ; The following may not be a good idea. Or maybe it needs to happen only when table data has changed
     ; not always.
     #_(when (not= old-data new-data)
@@ -280,8 +286,13 @@
     (swap! state-atom assoc :table-component table)))
 
 (defn rtable-model-setSelection [this table-selection]
-  (let [state-atom (.state this)]
-    (swap! state-atom assoc :table-selection table-selection)))
+  (let [state-atom (.state this)
+        state (swap! state-atom assoc :table-selection table-selection)]
+    ; The watch selects the rows only when :table-selection changes. That is not sufficient. A JTable clears its
+    ; selection when this model fires a structure change (setData, setRowFn and setColumnNames each fire one). Retroact
+    ; then calls setSelection again, and table-selection can be equal to the value that the state already holds. So
+    ; select the rows on each call.
+    (select-rows (:table-component state) table-selection)))
 
 (defn rtable-model-setSelectionFn [this selection-fn]
   (let [state-atom (.state this)]

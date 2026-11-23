@@ -845,8 +845,12 @@
    :row-editable-fn        set-row-editable-fn
    :row-fn                 set-row-fn
    :table-data             set-table-data
-   :selection              {:deps [:table-data]
-                            :fn   set-table-selection}
+   ; :table-data, :row-fn and :column-names each make the table model fire a structure change. A JTable clears its
+   ; selection when it gets a structure change. :update-on-deps-changed makes Retroact apply :selection again after
+   ; each of them, so Retroact selects the rows of :selection again.
+   :selection              {:deps                   [:table-data :row-fn :column-names]
+                            :update-on-deps-changed true
+                            :fn                     set-table-selection}
    :table-header {:set set-table-header
                   :get get-table-header}
    ;:table-selection-fn     set-table-selection-fn

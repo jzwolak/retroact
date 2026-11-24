@@ -55,6 +55,12 @@ clojure {
 sourceSets {
     main {
         output.getClassesDirs().from(sourceSets.main.clojure.srcDirs)
+        // Clojurephant adds the output directory of compileClojure to the classes directories, but Clojurephant does
+        // not tell Gradle that compileClojure makes that directory. A composite build that includes Retroact puts the
+        // directory on the compile classpath of that build. Without this line, the compileJava task of that build
+        // does not wait for compileClojure. compileJava can then read the directory while compileClojure deletes and
+        // writes the class files, and the build fails with a NoSuchFileException.
+        output.getClassesDirs().builtBy(tasks.named('compileClojure'))
     }
 }
 
